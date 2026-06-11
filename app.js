@@ -1,5 +1,5 @@
 /* =========================================================
-   AI Listener — app.js (v15)
+   AI Listener — app.js (v18)
    常時傍聴 → 文字起こし確定をトリガーに2段構えでGeminiへ送信
 
    v13の変更:
@@ -61,7 +61,7 @@ function loadSettings() {
 let settings = loadSettings();
 
 /* ===== バージョン(デプロイ反映確認用。リリースごとに更新) ===== */
-const APP_VERSION = "v15";
+const APP_VERSION = "v18";
 
 /* ===== 送信トリガーの時間定数 ===== */
 const SILENCE_FLUSH_MS  = 1500;   // 環境A:確定後この時間認識が途絶えたら送信
@@ -89,11 +89,15 @@ const MODES = {
     label: "単語補足",
     head: "MODE 2 / 単語補足",
     system:
-      "あなたは会話を傍聴し、用語を補足する辞書AIです。" +
-      "以下の文字起こしのうち【最新の発話】に含まれる専門用語・略語・固有名詞を" +
-      "重要なものから最大3語まで抽出し、「単語 — 意味」を各1文で日本語で列挙してください。" +
-      "一般的すぎる単語は除外。該当がなければ「(新出用語なし)」とだけ返す。" +
-      "【厳守】各説明は1文。前置き禁止。",
+      "あなたは会話を傍聴する辞書AIです。以下の【最新の発話】を解析し、含まれる語の意味を即座に列挙してください。" +
+      "対象: 専門用語・略語・英単語・カタカナ語・固有名詞・時事用語・やや難しい日本語。" +
+      "ルール: " +
+      "(1)発話が単語1つだけなら、どんな単語でも必ずその意味を調べて答える。" +
+      "(2)単語が連続で並んでいるなら、それぞれ全て調べる。" +
+      "(3)文章なら、調べる価値のある語を積極的に抽出する(重要順に最大5語)。迷ったら載せる。" +
+      "形式:「単語 — 意味」を各1文。誤認識と思われる語は推定される正しい語に直して説明し(推定)と付記。" +
+      "「は」「です」などの助詞・基本動詞しか無い場合のみ「(対象語なし)」と返す。" +
+      "【厳守】前置き禁止。各説明は1文。",
   },
   3: {
     label: "アドバイス",
@@ -175,6 +179,7 @@ const FLOOR_RISE_ALPHA     = 0.005;  // フロア上昇は遅く(発話を雑音
 const FLOOR_FALL_ALPHA     = 0.05;   // フロア下降は速く(静かになったら追従)
 const WATCHDOG_MS          = 5000;   // 認識エンジン監視周期
 const RESTART_IF_SILENT_MS = 25000;  // 音声があるのにテキストが来ない時間 → 再起動
+
 
 /* =========================================================
    ユーティリティ
@@ -813,7 +818,7 @@ vadRatioInput.addEventListener("input", () => {
 $("settingsSaveBtn").addEventListener("click", () => {
   settings.apiKey      = apiKeyInput.value.trim();
   settings.model       = modelInput.value.trim() || DEFAULT_MODEL;
-  settings.vadRatio    = Math.min(6, Math.max(1.2, parseFloat(vadRatioInput.value) || 2.5));
+  settings.vadRatio    = Math.min(6, Math.max(1.05, parseFloat(vadRatioInput.value) || 2.5));
   settings.vadHang     = Math.min(5000, Math.max(300, parseInt(vadHangInput.value, 10) || 800));
   settings.minInterval = Math.min(120, Math.max(0, parseInt(minIntervalInput.value, 10) || 8));
   settings.autoStop    = Math.min(120, Math.max(0, parseInt(autoStopInput.value, 10) || 0));
