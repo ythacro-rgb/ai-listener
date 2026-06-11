@@ -1,5 +1,5 @@
 /* =========================================================
-   AI Listener — app.js (v7.1)
+   AI Listener — app.js (v9)
    常時傍聴 → 文字起こし確定をトリガーに2段構えでGeminiへ送信
 
    v7の追加:
@@ -90,6 +90,9 @@ const MODES = {
       "【厳守】合計150文字以内。利用者は「あなた」と呼ぶ。中立・具体的に。前置き禁止。",
   },
 };
+
+/* ===== バージョン(デプロイ反映確認用。リリースごとに更新) ===== */
+const APP_VERSION = "v9";
 
 /* ===== DOM ===== */
 const $ = (id) => document.getElementById(id);
@@ -736,6 +739,9 @@ if ("serviceWorker" in navigator && location.protocol === "https:") {
 }
 
 /* =========================================================
-   起動時:APIキー未設定なら設定を開く
+   起動時:バージョン表示+APIキー未設定なら設定を開く
    ========================================================= */
+const verLabel = document.getElementById("verLabel");
+if (verLabel) verLabel.textContent = APP_VERSION;
+
 if (!settings.apiKey) openSettings();
