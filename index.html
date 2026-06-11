@@ -125,6 +125,12 @@
       <input type="number" id="vadHangInput" min="300" max="5000" step="100" value="800">
     </label>
 
+    <label class="field field-check">
+      <input type="checkbox" id="vadOnInput">
+      <span class="field-label-inline">音声レベル解析(VAD/SNR表示)を使用する</span>
+      <span class="field-hint">iPhone/iPadでは音声認識とマイクが競合して文字が出なくなるため、OFF推奨(初期値:iOSはOFF・その他はON)。送信は2秒/10秒トリガーで動くため、OFFでも機能に影響はありません。</span>
+    </label>
+
     <div class="modal-actions">
       <button id="clearLogBtn" class="btn ghost">ログを消去</button>
       <div class="spacer"></div>

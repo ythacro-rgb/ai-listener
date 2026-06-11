@@ -1,5 +1,5 @@
 /* =========================================================
-   AI Listener — app.js (v10)
+   AI Listener — app.js (v11)
    常時傍聴 → 文字起こし確定をトリガーに2段構えでGeminiへ送信
 
    v7の追加:
@@ -29,11 +29,19 @@ const LS = {
   vadHang:     "ail_vadHang",
   minInterval: "ail_minInterval",
   mode:        "ail_mode",
+  vadOn:       "ail_vadOn",
 };
 
 const DEFAULT_MODEL = "gemini-2.5-flash";
 
+/* iOS(iPhone/iPad)判定:SpeechRecognitionとWebAudioのマイク競合があるため、
+   iOSではVAD(音声レベル解析)を初期値OFFにする */
+const IS_IOS =
+  /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
 function loadSettings() {
+  const vadOnStored = localStorage.getItem(LS.vadOn);
   return {
     apiKey:      localStorage.getItem(LS.apiKey)   || "",
     model:       localStorage.getItem(LS.model)    || DEFAULT_MODEL,
@@ -41,6 +49,8 @@ function loadSettings() {
     vadHang:     parseInt(localStorage.getItem(LS.vadHang)  || "800", 10),
     minInterval: parseInt(localStorage.getItem(LS.minInterval) || "15", 10),
     mode:        parseInt(localStorage.getItem(LS.mode) || "1", 10),
+    // 未設定なら iOS はOFF、その他はON
+    vadOn:       vadOnStored === null ? !IS_IOS : vadOnStored === "1",
   };
 }
 
@@ -92,7 +102,7 @@ const MODES = {
 };
 
 /* ===== バージョン(デプロイ反映確認用。リリースごとに更新) ===== */
-const APP_VERSION = "v10";
+const APP_VERSION = "v11";
 
 /* ===== DOM ===== */
 const $ = (id) => document.getElementById(id);
@@ -113,6 +123,7 @@ const apiKeyInput      = $("apiKeyInput");
 const modelInput       = $("modelInput");
 const vadRatioInput    = $("vadRatioInput");
 const vadHangInput     = $("vadHangInput");
+const vadOnInput       = $("vadOnInput");
 const minIntervalInput = $("minIntervalInput");
 
 /* ===== 状態 ===== */
@@ -322,6 +333,7 @@ function tryFlush(force) {
    VAD:WebAudioによるSNR比率検知(補助トリガー)
    ========================================================= */
 async function startVAD() {
+  if (!settings.vadOn) return; // VAD無効(iOS初期値):マイクを音声認識に専有させる
   if (audioCtx) return;
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -419,8 +431,13 @@ function updateLevelUI(ratio) {
   waveform.classList.toggle("speaking", speaking);
 
   if (listening) {
-    snrLabel.textContent = "SNR " + ratio.toFixed(1) + "x";
-    snrLabel.classList.toggle("hot", ratio >= settings.vadRatio);
+    if (!settings.vadOn || !analyser) {
+      snrLabel.textContent = "SNR --";
+      snrLabel.classList.remove("hot");
+    } else {
+      snrLabel.textContent = "SNR " + ratio.toFixed(1) + "x";
+      snrLabel.classList.toggle("hot", ratio >= settings.vadRatio);
+    }
   } else {
     snrLabel.textContent = "";
   }
@@ -534,9 +551,10 @@ function startListening() {
   if (!recognition) recognition = createRecognition();
   listening = true;
   try { recognition.start(); } catch (_) { /* 既に開始済み */ }
-  startVAD();        // ユーザー操作起点なのでAudioContextも確実に開始できる
+  startVAD();        // ユーザー操作起点なのでAudioContextも確実に開始できる(VAD設定OFF時は何もしない)
   startWatchdog();
   setListeningUI(true);
+  updateLevelUI(0);  // VAD無効時は「SNR --」を即表示
 }
 
 function stopListening() {
@@ -691,6 +709,7 @@ function openSettings() {
   modelInput.value       = settings.model;
   vadRatioInput.value    = settings.vadRatio;
   vadHangInput.value     = settings.vadHang;
+  vadOnInput.checked     = settings.vadOn;
   minIntervalInput.value = settings.minInterval;
   settingsModal.classList.remove("hidden");
 }
@@ -706,12 +725,21 @@ $("settingsSaveBtn").addEventListener("click", () => {
   settings.model       = modelInput.value.trim() || DEFAULT_MODEL;
   settings.vadRatio    = Math.min(10, Math.max(1.2, parseFloat(vadRatioInput.value) || 2.5));
   settings.vadHang     = Math.min(5000, Math.max(300, parseInt(vadHangInput.value, 10) || 800));
+  const prevVadOn = settings.vadOn;
+  settings.vadOn       = vadOnInput.checked;
   settings.minInterval = Math.min(120, Math.max(0, parseInt(minIntervalInput.value, 10) || 15));
   localStorage.setItem(LS.apiKey,      settings.apiKey);
   localStorage.setItem(LS.model,       settings.model);
   localStorage.setItem(LS.vadRatio,    String(settings.vadRatio));
   localStorage.setItem(LS.vadHang,     String(settings.vadHang));
   localStorage.setItem(LS.minInterval, String(settings.minInterval));
+  localStorage.setItem(LS.vadOn,       settings.vadOn ? "1" : "0");
+  // VAD設定が変わった場合、傍聴中なら即反映
+  if (prevVadOn !== settings.vadOn && listening) {
+    if (settings.vadOn) startVAD();
+    else stopVAD();
+    updateLevelUI(0);
+  }
   modelCache = { key: "", name: "", model: null }; // 再生成させる
   closeSettings();
 });

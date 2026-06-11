@@ -325,6 +325,17 @@ html, body {
 }
 
 .field { display: block; margin-bottom: 13px; }
+.field-check input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  vertical-align: -3px;
+  margin-right: 6px;
+  accent-color: var(--mode1);
+}
+.field-label-inline {
+  font-size: 13px;
+  color: var(--ink);
+}
 .field-label {
   display: block;
   font-size: 12px;
