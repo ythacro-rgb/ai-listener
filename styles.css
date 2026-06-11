@@ -1,0 +1,349 @@
+/* =========================================================
+   AI Listener — 縦置きタブレット用 常時傍聴アシスタント
+   計器系ダークUI / 上下3分割レイアウト
+   ========================================================= */
+
+:root {
+  --bg:        #0D1117;
+  --panel:     #151C24;
+  --panel-2:   #1B2430;
+  --line:      #2A3543;
+  --ink:       #DCE3EC;
+  --dim:       #7D8896;
+  --rec:       #FF5A5F;
+  --mode1:     #53C7F0;   /* 会話     : シアン */
+  --mode2:     #F5A95B;   /* 単語補足 : アンバー */
+  --mode3:     #7FD18C;   /* アドバイス: グリーン */
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+  --sans: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", sans-serif;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* ===== 全体レイアウト:100dvhを上下3分割 ===== */
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* ===== ステータスバー ===== */
+#statusbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.status-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+}
+
+.live-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--rec);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.live-dot.off {
+  background: var(--dim);
+  animation: none;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1;   box-shadow: 0 0 0 0 rgba(255,90,95,0.5); }
+  50%      { opacity: 0.55; box-shadow: 0 0 0 6px rgba(255,90,95,0); }
+}
+
+.live-label { color: var(--dim); }
+.live-label.on { color: var(--rec); }
+
+/* 音声認識中の波形バー */
+.waveform {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 14px;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+.waveform.on { opacity: 1; }
+.waveform i {
+  display: block;
+  width: 3px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--rec);
+  animation: wave 0.9s ease-in-out infinite;
+}
+.waveform i:nth-child(2) { animation-delay: 0.15s; }
+.waveform i:nth-child(3) { animation-delay: 0.30s; }
+.waveform i:nth-child(4) { animation-delay: 0.45s; }
+.waveform i:nth-child(5) { animation-delay: 0.60s; }
+@keyframes wave {
+  0%, 100% { height: 4px; }
+  50%      { height: 14px; }
+}
+
+.status-right { display: flex; gap: 6px; }
+
+.icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px; height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--ink);
+  cursor: pointer;
+}
+.icon-btn:active { background: var(--line); }
+.icon-btn.mic-on { color: var(--rec); border-color: var(--rec); }
+
+/* ===== 上下のペイン ===== */
+.pane {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;          /* flex子のスクロールに必須 */
+  display: flex;
+  flex-direction: column;
+}
+
+#transcriptPane { background: var(--bg); }
+#aiPane         { background: var(--panel); border-top: 1px solid var(--line); }
+
+/* 標準のタッチスクロールのみ(独自ホイールUIなし) */
+.scroll-area {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 14px 16px;
+}
+
+.placeholder {
+  color: var(--dim);
+  font-size: 14px;
+  padding-top: 8px;
+}
+
+/* ----- 文字起こしログ ----- */
+.ts-entry {
+  margin-bottom: 10px;
+  line-height: 1.7;
+  font-size: 17px;
+  word-break: break-word;
+}
+.ts-entry time {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dim);
+  margin-right: 8px;
+  vertical-align: 2px;
+}
+
+/* 認識途中(interim)の1行表示 */
+.interim-line {
+  flex: 0 0 auto;
+  min-height: 0;
+  padding: 0 16px;
+  color: var(--dim);
+  font-size: 16px;
+  line-height: 1.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.interim-line:not(:empty) {
+  padding: 6px 16px 10px;
+  border-top: 1px dashed var(--line);
+}
+
+/* ----- AI回答ログ ----- */
+.ai-entry {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  background: var(--panel-2);
+  border-radius: 12px;
+  border-left: 3px solid var(--dim);
+  font-size: 16px;
+  line-height: 1.75;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+.ai-entry.mode-1 { border-left-color: var(--mode1); }
+.ai-entry.mode-2 { border-left-color: var(--mode2); }
+.ai-entry.mode-3 { border-left-color: var(--mode3); }
+
+.ai-entry .ai-head {
+  display: block;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--dim);
+  margin-bottom: 6px;
+}
+.ai-entry.error { border-left-color: var(--rec); color: #F2B8BA; }
+
+/* ストリーミング中カーソル */
+.ai-entry.streaming::after {
+  content: "▌";
+  color: var(--dim);
+  animation: blink 1s step-end infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+/* ===== 中央:モードバー ===== */
+#modeBar {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--panel-2);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.mode-btn {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 4px 9px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--dim);
+  cursor: pointer;
+  /* 物理ボタン風の立体感 */
+  box-shadow: 0 3px 0 #0A0E13, inset 0 1px 0 rgba(255,255,255,0.04);
+  transition: transform 0.06s, box-shadow 0.06s;
+  -webkit-tap-highlight-color: transparent;
+}
+.mode-btn:active {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 #0A0E13;
+}
+
+.mode-num {
+  font-family: var(--mono);
+  font-size: 11px;
+  opacity: 0.7;
+}
+.mode-name {
+  font-size: 16px;
+  font-weight: 700;
+}
+.mode-desc {
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+/* 選択中ハイライト(モード別カラー) */
+.mode-btn.active { color: var(--bg); font-weight: 600; }
+.mode-btn.mode-1.active { background: var(--mode1); border-color: var(--mode1); box-shadow: 0 0 14px rgba(83,199,240,0.35); }
+.mode-btn.mode-2.active { background: var(--mode2); border-color: var(--mode2); box-shadow: 0 0 14px rgba(245,169,91,0.35); }
+.mode-btn.mode-3.active { background: var(--mode3); border-color: var(--mode3); box-shadow: 0 0 14px rgba(127,209,140,0.35); }
+
+/* ===== 設定モーダル ===== */
+.modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.6);
+  z-index: 100;
+  padding: 20px;
+}
+.modal.hidden { display: none; }
+
+.modal-card {
+  width: 100%;
+  max-width: 440px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 22px 20px;
+}
+.modal-card h2 {
+  font-size: 18px;
+  margin-bottom: 18px;
+}
+
+.field { display: block; margin-bottom: 16px; }
+.field-label {
+  display: block;
+  font-size: 13px;
+  color: var(--dim);
+  margin-bottom: 6px;
+}
+.field input {
+  width: 100%;
+  padding: 12px;
+  font-size: 16px;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-family: var(--mono);
+}
+.field input:focus {
+  outline: 2px solid var(--mode1);
+  outline-offset: 1px;
+}
+.field-hint {
+  display: block;
+  font-size: 11px;
+  color: var(--dim);
+  margin-top: 4px;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
+.modal-actions .spacer { flex: 1; }
+
+.btn {
+  padding: 11px 18px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  font-size: 15px;
+  cursor: pointer;
+}
+.btn.ghost   { background: transparent; color: var(--dim); }
+.btn.primary { background: var(--mode1); border-color: var(--mode1); color: var(--bg); font-weight: 700; }
+.btn:active  { opacity: 0.8; }
+
+/* キーボードフォーカス */
+button:focus-visible, input:focus-visible {
+  outline: 2px solid var(--mode1);
+  outline-offset: 2px;
+}
+
+/* モーション低減設定の尊重 */
+@media (prefers-reduced-motion: reduce) {
+  .live-dot, .waveform i, .ai-entry.streaming::after { animation: none; }
+}

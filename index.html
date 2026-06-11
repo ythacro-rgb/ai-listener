@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0D1117">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="AI Listener">
+<title>AI Listener — 常時傍聴アシスタント</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ===== ヘッダー(ステータスバー) ===== -->
+  <header id="statusbar">
+    <div class="status-left">
+      <span id="liveDot" class="live-dot off"></span>
+      <span id="liveLabel" class="live-label">STANDBY</span>
+      <span id="waveform" class="waveform" aria-hidden="true">
+        <i></i><i></i><i></i><i></i><i></i>
+      </span>
+    </div>
+    <div class="status-right">
+      <button id="micToggleBtn" class="icon-btn" title="マイク ON/OFF" aria-label="マイク ON/OFF">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
+          <line x1="12" y1="18" x2="12" y2="22"/>
+        </svg>
+      </button>
+      <button id="settingsBtn" class="icon-btn" title="設定" aria-label="設定">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ===== 上部:文字起こしログ ===== -->
+  <section id="transcriptPane" class="pane">
+    <div id="transcriptLog" class="scroll-area" aria-live="polite">
+      <p class="placeholder">マイクをONにすると、聞き取ったテキストがここに流れます。</p>
+    </div>
+    <div id="interimLine" class="interim-line"></div>
+  </section>
+
+  <!-- ===== 中央:モード切り替えボタン ===== -->
+  <nav id="modeBar" aria-label="AIモード切り替え">
+    <button class="mode-btn mode-1 active" data-mode="1">
+      <span class="mode-num">1</span>
+      <span class="mode-name">会話</span>
+      <span class="mode-desc">応答・要約</span>
+    </button>
+    <button class="mode-btn mode-2" data-mode="2">
+      <span class="mode-num">2</span>
+      <span class="mode-name">単語補足</span>
+      <span class="mode-desc">用語の意味</span>
+    </button>
+    <button class="mode-btn mode-3" data-mode="3">
+      <span class="mode-num">3</span>
+      <span class="mode-name">アドバイス</span>
+      <span class="mode-desc">次の一手</span>
+    </button>
+  </nav>
+
+  <!-- ===== 下部:AI回答 ===== -->
+  <section id="aiPane" class="pane">
+    <div id="aiLog" class="scroll-area">
+      <p class="placeholder">AIの回答がここに表示されます。</p>
+    </div>
+  </section>
+
+</div>
+
+<!-- ===== 設定モーダル ===== -->
+<div id="settingsModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+  <div class="modal-card">
+    <h2 id="settingsTitle">設定</h2>
+
+    <label class="field">
+      <span class="field-label">Gemini API キー</span>
+      <input type="password" id="apiKeyInput" placeholder="AIza..." autocomplete="off">
+      <span class="field-hint">この端末のローカルストレージにのみ保存されます。</span>
+    </label>
+
+    <label class="field">
+      <span class="field-label">モデル名</span>
+      <input type="text" id="modelInput" placeholder="gemini-2.5-flash" autocomplete="off">
+    </label>
+
+    <label class="field">
+      <span class="field-label">無音判定(秒) — 発話が途切れてからAIに送るまでの待ち時間</span>
+      <input type="number" id="silenceInput" min="0.5" max="10" step="0.5" value="2">
+    </label>
+
+    <div class="modal-actions">
+      <button id="clearLogBtn" class="btn ghost">ログを消去</button>
+      <div class="spacer"></div>
+      <button id="settingsCancelBtn" class="btn ghost">閉じる</button>
+      <button id="settingsSaveBtn" class="btn primary">保存</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

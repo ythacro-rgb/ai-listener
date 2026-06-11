@@ -1,0 +1,19 @@
+{
+  "name": "AI Listener — 常時傍聴アシスタント",
+  "short_name": "AI Listener",
+  "description": "マイクで会話を常時聞き取り、Geminiが会話・単語補足・アドバイスを返すタブレット用アシスタント",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0D1117",
+  "theme_color": "#0D1117",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
