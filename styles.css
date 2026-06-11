@@ -1,6 +1,6 @@
 /* =========================================================
    AI Listener — 縦置きタブレット/スマホ用 常時傍聴アシスタント
-   計器系ダークUI / 上下3分割 / 右下フローティングマイク
+   計器系ダークUI / 上下3分割レイアウト(4モード・印刷対応)
    ========================================================= */
 
 :root {
@@ -113,13 +113,12 @@ html, body {
   gap: 4px;
 }
 
-/* バージョン表示(デプロイ反映確認用・控えめ) */
+/* バージョン表示(デプロイ反映確認用・保存ボタンの左にグレー) */
 .ver-label {
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 10px;
   color: var(--dim);
-  opacity: 0.6;
-  margin-right: 3px;
+  margin-right: 4px;
   letter-spacing: 0.05em;
 }
 
@@ -136,33 +135,11 @@ html, body {
   -webkit-tap-highlight-color: transparent;
 }
 .icon-btn:active { background: var(--line); }
-
-/* ===== マイク:右下フローティングボタン ===== */
-.fab-mic {
-  position: fixed;
-  right: 14px;
-  bottom: calc(14px + env(safe-area-inset-bottom));
-  width: 58px;
-  height: 58px;
-  border-radius: 50%;
-  border: 1px solid var(--line);
-  background: var(--panel-2);
-  color: var(--dim);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  z-index: 60;
-  box-shadow: 0 4px 14px rgba(0,0,0,0.5);
-  -webkit-tap-highlight-color: transparent;
-  transition: background 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.15s;
-}
-.fab-mic:active { transform: scale(0.94); }
-.fab-mic.mic-on {
+/* マイクON時:赤点灯(元の表示) */
+.icon-btn.mic-on {
+  color: #fff;
   background: var(--rec);
   border-color: var(--rec);
-  color: #fff;
-  box-shadow: 0 4px 18px rgba(255,90,95,0.5);
 }
 
 /* ===== 上下のペイン:下(AI回答)を広く ===== */
@@ -184,9 +161,6 @@ html, body {
   -webkit-overflow-scrolling: touch;
   padding: 8px 12px;
 }
-
-/* フローティングマイクの裏に最後の行が隠れないよう余白を確保 */
-#aiLog { padding-bottom: 84px; }
 
 .placeholder {
   color: var(--dim);
@@ -418,7 +392,7 @@ button:focus-visible, input:focus-visible {
     color: #000;
     height: auto;
   }
-  #statusbar, #modeBar, .interim-line, .modal, .fab-mic { display: none !important; }
+  #statusbar, #modeBar, .interim-line, .modal { display: none !important; }
   #app {
     display: block;
     height: auto;
@@ -434,7 +408,6 @@ button:focus-visible, input:focus-visible {
     height: auto;
     padding: 0;
   }
-  #aiLog { padding-bottom: 0; }
   /* セクション見出しを印刷時に付与 */
   #transcriptPane::before {
     content: "■ 文字起こし(音声入力)";

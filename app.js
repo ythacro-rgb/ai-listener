@@ -1,5 +1,5 @@
 /* =========================================================
-   AI Listener — app.js (v9)
+   AI Listener — app.js (v10)
    常時傍聴 → 文字起こし確定をトリガーに2段構えでGeminiへ送信
 
    v7の追加:
@@ -92,7 +92,7 @@ const MODES = {
 };
 
 /* ===== バージョン(デプロイ反映確認用。リリースごとに更新) ===== */
-const APP_VERSION = "v9";
+const APP_VERSION = "v10";
 
 /* ===== DOM ===== */
 const $ = (id) => document.getElementById(id);
