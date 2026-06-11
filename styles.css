@@ -1,6 +1,6 @@
 /* =========================================================
-   AI Listener — 縦置きタブレット用 常時傍聴アシスタント
-   計器系ダークUI / 上下3分割レイアウト
+   AI Listener — 縦置きタブレット/スマホ用 常時傍聴アシスタント
+   計器系ダークUI / 上下3分割レイアウト(圧縮版)
    ========================================================= */
 
 :root {
@@ -38,13 +38,13 @@ html, body {
   padding-bottom: env(safe-area-inset-bottom);
 }
 
-/* ===== ステータスバー ===== */
+/* ===== ステータスバー(圧縮) ===== */
 #statusbar {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 14px;
+  padding: 4px 10px;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
 }
@@ -52,14 +52,14 @@ html, body {
 .status-left {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   font-family: var(--mono);
-  font-size: 12px;
-  letter-spacing: 0.12em;
+  font-size: 11px;
+  letter-spacing: 0.1em;
 }
 
 .live-dot {
-  width: 10px; height: 10px;
+  width: 8px; height: 8px;
   border-radius: 50%;
   background: var(--rec);
   animation: pulse 1.2s ease-in-out infinite;
@@ -70,18 +70,18 @@ html, body {
 }
 @keyframes pulse {
   0%, 100% { opacity: 1;   box-shadow: 0 0 0 0 rgba(255,90,95,0.5); }
-  50%      { opacity: 0.55; box-shadow: 0 0 0 6px rgba(255,90,95,0); }
+  50%      { opacity: 0.55; box-shadow: 0 0 0 5px rgba(255,90,95,0); }
 }
 
 .live-label { color: var(--dim); }
 .live-label.on { color: var(--rec); }
 
-/* 音声認識中の波形バー */
+/* 音声レベルメーター(実RMS連動・JSが高さを制御) */
 .waveform {
   display: inline-flex;
   align-items: flex-end;
   gap: 2px;
-  height: 14px;
+  height: 12px;
   opacity: 0;
   transition: opacity 0.3s;
 }
@@ -89,29 +89,32 @@ html, body {
 .waveform i {
   display: block;
   width: 3px;
-  height: 4px;
+  height: 3px;
   border-radius: 2px;
-  background: var(--rec);
-  animation: wave 0.9s ease-in-out infinite;
+  background: var(--dim);
+  transition: height 0.05s linear, background 0.15s;
 }
-.waveform i:nth-child(2) { animation-delay: 0.15s; }
-.waveform i:nth-child(3) { animation-delay: 0.30s; }
-.waveform i:nth-child(4) { animation-delay: 0.45s; }
-.waveform i:nth-child(5) { animation-delay: 0.60s; }
-@keyframes wave {
-  0%, 100% { height: 4px; }
-  50%      { height: 14px; }
-}
+.waveform.speaking i { background: var(--rec); }
 
-.status-right { display: flex; gap: 6px; }
+/* SNR比率の数値表示(VAD閾値調整の目安) */
+.snr-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--dim);
+  letter-spacing: 0.05em;
+  min-width: 56px;
+}
+.snr-label.hot { color: var(--rec); }
+
+.status-right { display: flex; gap: 5px; }
 
 .icon-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 44px; height: 44px;
+  width: 36px; height: 36px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--panel-2);
   color: var(--ink);
   cursor: pointer;
@@ -119,17 +122,16 @@ html, body {
 .icon-btn:active { background: var(--line); }
 .icon-btn.mic-on { color: var(--rec); border-color: var(--rec); }
 
-/* ===== 上下のペイン ===== */
+/* ===== 上下のペイン:下(AI回答)を広く ===== */
 .pane {
   position: relative;
-  flex: 1 1 0;
   min-height: 0;          /* flex子のスクロールに必須 */
   display: flex;
   flex-direction: column;
 }
 
-#transcriptPane { background: var(--bg); }
-#aiPane         { background: var(--panel); border-top: 1px solid var(--line); }
+#transcriptPane { flex: 1 1 0;   background: var(--bg); }
+#aiPane         { flex: 1.8 1 0; background: var(--panel); border-top: 1px solid var(--line); }
 
 /* 標準のタッチスクロールのみ(独自ホイールUIなし) */
 .scroll-area {
@@ -137,56 +139,55 @@ html, body {
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 14px 16px;
+  padding: 8px 12px;
 }
 
 .placeholder {
   color: var(--dim);
-  font-size: 14px;
-  padding-top: 8px;
+  font-size: 13px;
+  padding-top: 4px;
 }
 
-/* ----- 文字起こしログ ----- */
+/* ----- 文字起こしログ(行間圧縮) ----- */
 .ts-entry {
-  margin-bottom: 10px;
-  line-height: 1.7;
-  font-size: 17px;
+  margin-bottom: 2px;
+  line-height: 1.45;
+  font-size: 14px;
   word-break: break-word;
 }
 .ts-entry time {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 10px;
   color: var(--dim);
-  margin-right: 8px;
-  vertical-align: 2px;
+  margin-right: 6px;
 }
 
 /* 認識途中(interim)の1行表示 */
 .interim-line {
   flex: 0 0 auto;
   min-height: 0;
-  padding: 0 16px;
+  padding: 0 12px;
   color: var(--dim);
-  font-size: 16px;
-  line-height: 1.6;
+  font-size: 13px;
+  line-height: 1.4;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .interim-line:not(:empty) {
-  padding: 6px 16px 10px;
+  padding: 3px 12px 5px;
   border-top: 1px dashed var(--line);
 }
 
 /* ----- AI回答ログ ----- */
 .ai-entry {
-  margin-bottom: 14px;
-  padding: 12px 14px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
   background: var(--panel-2);
-  border-radius: 12px;
+  border-radius: 8px;
   border-left: 3px solid var(--dim);
-  font-size: 16px;
-  line-height: 1.75;
+  font-size: 15px;
+  line-height: 1.55;
   word-break: break-word;
   white-space: pre-wrap;
 }
@@ -197,12 +198,18 @@ html, body {
 .ai-entry .ai-head {
   display: block;
   font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.1em;
+  font-size: 10px;
+  letter-spacing: 0.08em;
   color: var(--dim);
-  margin-bottom: 6px;
+  margin-bottom: 3px;
 }
-.ai-entry.error { border-left-color: var(--rec); color: #F2B8BA; }
+.ai-entry.error {
+  border-left-color: var(--rec);
+  color: #F2B8BA;
+  padding: 5px 10px;
+  font-size: 13px;
+}
+.ai-entry.error .ai-head { margin-bottom: 1px; }
 
 /* ストリーミング中カーソル */
 .ai-entry.streaming::after {
@@ -212,12 +219,12 @@ html, body {
 }
 @keyframes blink { 50% { opacity: 0; } }
 
-/* ===== 中央:モードバー ===== */
+/* ===== 中央:モードバー(小型1行ボタン) ===== */
 #modeBar {
   flex: 0 0 auto;
   display: flex;
-  gap: 10px;
-  padding: 10px 14px;
+  gap: 6px;
+  padding: 5px 10px;
   background: var(--panel-2);
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
@@ -226,44 +233,41 @@ html, body {
 .mode-btn {
   flex: 1 1 0;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  gap: 2px;
-  padding: 10px 4px 9px;
-  border-radius: 14px;
+  justify-content: center;
+  gap: 5px;
+  padding: 8px 4px;
+  border-radius: 9px;
   border: 1px solid var(--line);
   background: var(--panel);
   color: var(--dim);
   cursor: pointer;
   /* 物理ボタン風の立体感 */
-  box-shadow: 0 3px 0 #0A0E13, inset 0 1px 0 rgba(255,255,255,0.04);
+  box-shadow: 0 2px 0 #0A0E13, inset 0 1px 0 rgba(255,255,255,0.04);
   transition: transform 0.06s, box-shadow 0.06s;
   -webkit-tap-highlight-color: transparent;
 }
 .mode-btn:active {
-  transform: translateY(2px);
+  transform: translateY(1px);
   box-shadow: 0 1px 0 #0A0E13;
 }
 
 .mode-num {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 10px;
   opacity: 0.7;
 }
 .mode-name {
-  font-size: 16px;
+  font-size: 13px;
   font-weight: 700;
-}
-.mode-desc {
-  font-size: 11px;
-  opacity: 0.75;
 }
 
 /* 選択中ハイライト(モード別カラー) */
-.mode-btn.active { color: var(--bg); font-weight: 600; }
-.mode-btn.mode-1.active { background: var(--mode1); border-color: var(--mode1); box-shadow: 0 0 14px rgba(83,199,240,0.35); }
-.mode-btn.mode-2.active { background: var(--mode2); border-color: var(--mode2); box-shadow: 0 0 14px rgba(245,169,91,0.35); }
-.mode-btn.mode-3.active { background: var(--mode3); border-color: var(--mode3); box-shadow: 0 0 14px rgba(127,209,140,0.35); }
+.mode-btn.active { color: var(--bg); }
+.mode-btn.mode-1.active { background: var(--mode1); border-color: var(--mode1); }
+.mode-btn.mode-2.active { background: var(--mode2); border-color: var(--mode2); }
+.mode-btn.mode-3.active { background: var(--mode3); border-color: var(--mode3); }
 
 /* ===== 設定モーダル ===== */
 .modal {
@@ -274,38 +278,41 @@ html, body {
   justify-content: center;
   background: rgba(0,0,0,0.6);
   z-index: 100;
-  padding: 20px;
+  padding: 16px;
 }
 .modal.hidden { display: none; }
 
 .modal-card {
   width: 100%;
   max-width: 440px;
+  max-height: 90dvh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 16px;
-  padding: 22px 20px;
+  border-radius: 14px;
+  padding: 18px 16px;
 }
 .modal-card h2 {
-  font-size: 18px;
-  margin-bottom: 18px;
+  font-size: 17px;
+  margin-bottom: 14px;
 }
 
-.field { display: block; margin-bottom: 16px; }
+.field { display: block; margin-bottom: 13px; }
 .field-label {
   display: block;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--dim);
-  margin-bottom: 6px;
+  margin-bottom: 5px;
 }
 .field input {
   width: 100%;
-  padding: 12px;
-  font-size: 16px;
+  padding: 10px;
+  font-size: 16px;   /* 16px未満だとiOSがフォーカス時に自動ズームする */
   color: var(--ink);
   background: var(--bg);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 8px;
   font-family: var(--mono);
 }
 .field input:focus {
@@ -316,21 +323,22 @@ html, body {
   display: block;
   font-size: 11px;
   color: var(--dim);
-  margin-top: 4px;
+  margin-top: 3px;
 }
 
 .modal-actions {
   display: flex;
-  gap: 10px;
-  margin-top: 8px;
+  gap: 8px;
+  margin-top: 6px;
+  flex-wrap: wrap;
 }
 .modal-actions .spacer { flex: 1; }
 
 .btn {
-  padding: 11px 18px;
-  border-radius: 10px;
+  padding: 10px 16px;
+  border-radius: 8px;
   border: 1px solid var(--line);
-  font-size: 15px;
+  font-size: 14px;
   cursor: pointer;
 }
 .btn.ghost   { background: transparent; color: var(--dim); }
@@ -345,5 +353,6 @@ button:focus-visible, input:focus-visible {
 
 /* モーション低減設定の尊重 */
 @media (prefers-reduced-motion: reduce) {
-  .live-dot, .waveform i, .ai-entry.streaming::after { animation: none; }
+  .live-dot, .ai-entry.streaming::after { animation: none; }
+  .waveform i { transition: none; }
 }

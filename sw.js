@@ -3,7 +3,7 @@
    静的ファイルのみキャッシュ。API通信はキャッシュしない。
    ========================================================= */
 
-const CACHE = "ai-listener-v1";
+const CACHE = "ai-listener-v3";
 const ASSETS = [
   "./",
   "./index.html",
@@ -33,8 +33,14 @@ self.addEventListener("fetch", (e) => {
   // Gemini API・外部ESM(ライブラリ)はネットワーク直通
   if (url.origin !== self.location.origin) return;
 
-  // 同一オリジンの静的ファイル:キャッシュ優先、なければネットワーク
+  // 同一オリジンの静的ファイル:ネットワーク優先、失敗時キャッシュ
   e.respondWith(
-    caches.match(e.request).then((cached) => cached || fetch(e.request))
+    fetch(e.request)
+      .then((res) => {
+        const copy = res.clone();
+        caches.open(CACHE).then((c) => c.put(e.request, copy));
+        return res;
+      })
+      .catch(() => caches.match(e.request))
   );
 });
