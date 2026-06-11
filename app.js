@@ -1,5 +1,5 @@
 /* =========================================================
-   AI Listener — app.js (v13)
+   AI Listener — app.js (v14)
    常時傍聴 → 文字起こし確定をトリガーに2段構えでGeminiへ送信
 
    v13の変更:
@@ -61,7 +61,7 @@ function loadSettings() {
 let settings = loadSettings();
 
 /* ===== バージョン(デプロイ反映確認用。リリースごとに更新) ===== */
-const APP_VERSION = "v13";
+const APP_VERSION = "v14";
 
 /* ===== 送信トリガーの時間定数 ===== */
 const SILENCE_FLUSH_MS  = 1500;   // 環境A:確定後この時間認識が途絶えたら送信
@@ -863,5 +863,18 @@ if ("serviceWorker" in navigator && location.protocol === "https:") {
 if (verLabel) verLabel.textContent = APP_VERSION;
 applySplit();
 applyModeLayout();
+
+/* styles.css の更新漏れ検出:
+   v13以降のCSSなら #splitArea は display:flex のはず。
+   そうでなければ古いCSSがデプロイされているので画面に明示する */
+if (getComputedStyle(splitArea).display !== "flex") {
+  const warn = document.createElement("div");
+  warn.style.cssText =
+    "position:fixed;top:0;left:0;right:0;z-index:999;background:#FF5A5F;color:#fff;" +
+    "font-size:13px;padding:8px 12px;text-align:center;font-family:sans-serif;";
+  warn.textContent =
+    "⚠ styles.css が古いバージョンのままです。styles.css もGitHubに上書きしてください。";
+  document.body.appendChild(warn);
+}
 
 if (!settings.apiKey) openSettings();
