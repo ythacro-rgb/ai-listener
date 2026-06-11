@@ -1,23 +1,22 @@
 /* =========================================================
-   AI Listener — app.js (v6)
+   AI Listener — app.js (v7)
    常時傍聴 → 文字起こし確定をトリガーに2段構えでGeminiへ送信
 
-   v5の修正(リクエスト暴走対策):
-   - busy(AI応答中)の間は armSilenceTimer / armForceTimer /
-     tryFlush のすべてが即リターン。新規タイマーは一切作動しない。
-     応答中に確定したテキストは pendingBuffer に溜まるだけ。
-   - tryFlush 内の setTimeout による待ち合わせ再試行ループを完全撤廃。
-     送信条件(最小送信間隔・クールダウン)を満たさない場合は
-     単純にスキップし、ガード付きの armForceTimer() を1本だけ張る
-     (forceTimer作動中は即リターンするため重複は構造的に不可能)。
-   - AI応答完了時(finally)に pendingBuffer が残っている場合のみ、
-     改めて armSilenceTimer / armForceTimer を張り直す。
-   - 503(過負荷)も429と同様に30秒クールダウン対象に追加。
+   v7の追加:
+   - モード0「文字起こし」: AI通信を完全停止(トークン消費ゼロ)。
+     確定テキストはpendingBufferに積まず、送信タイマーも作動しない。
+     文脈履歴(fullLog)には記録されるため、後でモード1〜3に
+     切り替えた際の文脈としては活用される。
+   - テキスト保存ボタン: 文字起こし(音声入力)とAI回答(音声出力)を
+     1つの.txtファイルとしてダウンロード。
+   - 印刷ボタン: window.print()。印刷用CSSで両ログを白背景・全文出力。
 
-   送信トリガー(recognition.onresult 起点):
+   送信トリガー(v5/v6から継続):
    【環境A:静かな場所】確定後、認識イベントが2秒途絶えたら送信
    【環境B:騒音下】未送信テキスト発生から10秒で強制送信
      (最小送信間隔をバイパス。クールダウンのみ尊重)
+   busy(AI応答中)の間は全タイマー・全送信が即リターン。
+   gemini-2.5系の思考トークンは無効化済み(文字切れ対策)。
    ========================================================= */
 
 import { GoogleGenerativeAI } from "https://esm.run/@google/generative-ai";
@@ -51,10 +50,15 @@ let settings = loadSettings();
 const SILENCE_FLUSH_MS  = 2000;   // 環境A:確定後この時間認識が途絶えたら送信
 const FORCE_FLUSH_MS    = 10000;  // 環境B:未送信テキスト発生からこの時間で強制送信
 const COOLDOWN_MS       = 30000;  // 429/503受信後のクールダウン
-const MAX_OUTPUT_TOKENS = 1024;   // 回答の長さ上限(思考トークン含む)
+const MAX_OUTPUT_TOKENS = 1024;   // 回答の長さ上限(出力トークン)
 
 /* ===== モード定義(プロンプト動的切り替え・短文指定) ===== */
 const MODES = {
+  0: {
+    label: "文字起こし",
+    head: "文字起こし",
+    system: null, // AI通信なし(トークン消費ゼロ)
+  },
   1: {
     label: "会話",
     head: "MODE 1 / 会話",
@@ -96,6 +100,8 @@ const waveform         = $("waveform");
 const waveBars         = waveform.querySelectorAll("i");
 const snrLabel         = $("snrLabel");
 const micToggleBtn     = $("micToggleBtn");
+const saveBtn          = $("saveBtn");
+const printBtn         = $("printBtn");
 const settingsBtn      = $("settingsBtn");
 const settingsModal    = $("settingsModal");
 const apiKeyInput      = $("apiKeyInput");
@@ -117,7 +123,7 @@ let lastRequestAt = 0;       // 最後にGeminiへ送信した時刻
 let cooldownUntil = 0;       // 429/503クールダウン終了時刻
 let lastError     = null;    // {div, body, text, count} 同一エラーの集約用
 
-/* ===== 送信トリガー用タイマー(intervalTimerは撤廃) ===== */
+/* ===== 送信トリガー用タイマー ===== */
 let silenceTimer = null;     // 環境A:2秒無音デバウンス
 let forceTimer   = null;     // 環境B:10秒強制送信
 
@@ -210,13 +216,59 @@ function appendTranscript(text) {
 }
 
 /* =========================================================
-   送信トリガー管理(busy中は一切作動しない)
+   テキスト保存・印刷
+   ========================================================= */
+function buildExportText() {
+  const lines = [];
+  lines.push("AI Listener ログ  " + new Date().toLocaleString("ja-JP"));
+  lines.push("");
+  lines.push("================ 文字起こし(音声入力) ================");
+  transcriptLog.querySelectorAll(".ts-entry").forEach((e) => {
+    const t = e.querySelector("time")?.textContent || "";
+    const txt = e.textContent.replace(t, "").trim();
+    lines.push(`[${t}] ${txt}`);
+  });
+  lines.push("");
+  lines.push("================ AI回答(音声出力) ================");
+  aiLog.querySelectorAll(".ai-entry").forEach((e) => {
+    const head = e.querySelector(".ai-head")?.textContent || "";
+    const body = e.querySelector(".ai-body")?.textContent || "";
+    lines.push(`[${head}]`);
+    lines.push(body);
+    lines.push("");
+  });
+  return lines.join("\n");
+}
+
+function saveAsText() {
+  const d = new Date();
+  const stamp =
+    d.getFullYear() +
+    String(d.getMonth() + 1).padStart(2, "0") +
+    String(d.getDate()).padStart(2, "0") + "_" +
+    String(d.getHours()).padStart(2, "0") +
+    String(d.getMinutes()).padStart(2, "0");
+  const blob = new Blob([buildExportText()], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `ai-listener_${stamp}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+saveBtn.addEventListener("click", saveAsText);
+printBtn.addEventListener("click", () => window.print());
+
+/* =========================================================
+   送信トリガー管理(busy中・モード0では一切作動しない)
    ========================================================= */
 
-/* 環境A:2秒無音デバウンス。認識イベントが来るたびに張り直す。
-   busy中は新規タイマーを絶対に走らせない(応答完了時に張り直される) */
+/* 環境A:2秒無音デバウンス。認識イベントが来るたびに張り直す */
 function armSilenceTimer() {
-  if (busy) return;
+  if (busy || currentMode === 0) return;
   clearTimeout(silenceTimer);
   silenceTimer = setTimeout(() => {
     silenceTimer = null;
@@ -224,10 +276,9 @@ function armSilenceTimer() {
   }, SILENCE_FLUSH_MS);
 }
 
-/* 環境B:10秒強制送信。未送信テキスト発生時に1回だけ張る(延長しない)。
-   busy中・作動中は即リターン → 同時に存在できるforceTimerは常に最大1本 */
+/* 環境B:10秒強制送信。未送信テキスト発生時に1回だけ張る(延長しない) */
 function armForceTimer() {
-  if (busy) return;
+  if (busy || currentMode === 0) return;
   if (forceTimer) return;
   forceTimer = setTimeout(() => {
     forceTimer = null;
@@ -235,19 +286,19 @@ function armForceTimer() {
   }, FORCE_FLUSH_MS);
 }
 
-/* 両タイマーのクリア(送信実行時・停止時に呼ぶ) */
+/* 両タイマーのクリア(送信実行時・停止時・モード0切替時に呼ぶ) */
 function clearFlushTimers() {
   clearTimeout(silenceTimer); silenceTimer = null;
   clearTimeout(forceTimer);   forceTimer = null;
 }
 
-/* 送信ゲート(スリム化版):
-   - busy中は即リターン(再試行予約もしない)
+/* 送信ゲート:
+   - busy中・モード0では即リターン(再試行予約もしない)
    - 条件を満たさなければ単純にスキップ。再送の機会は
      ガード付き armForceTimer() 1本のみ(重複不可能)に委ねる
    - force=true は最小送信間隔をバイパス。クールダウンのみ尊重 */
 function tryFlush(force) {
-  if (busy) return;
+  if (busy || currentMode === 0) return;
   if (!pendingBuffer.trim()) return;
 
   const now = Date.now();
@@ -346,7 +397,7 @@ function vadTick() {
       // ===== 発話終了(補助トリガー):2秒を待たず送信を試みる =====
       speaking = false;
       belowSince = 0;
-      tryFlush(false); // busy中・条件未達なら内部で安全にスキップされる
+      tryFlush(false); // busy中・モード0・条件未達なら内部で安全にスキップされる
     }
   }
 
@@ -399,16 +450,20 @@ function createRecognition() {
       if (!text) continue;
 
       if (r.isFinal) {
-        /* ===== テキスト確定:表示+バッファ ===== */
+        /* ===== テキスト確定:表示+履歴 ===== */
         appendTranscript(text);
         fullLog.push(text);
-        pendingBuffer += (pendingBuffer ? "\n" : "") + text;
         lastFinalAt = Date.now();
 
-        /* 送信トリガー(busy中は両関数とも内部で即リターン。
-           応答完了時のfinallyで張り直されるため取りこぼしなし) */
-        armSilenceTimer();  // 【環境A】2秒無音デバウンス
-        armForceTimer();    // 【環境B】10秒強制送信(作動中なら延長しない)
+        if (currentMode !== 0) {
+          /* モード1〜3:バッファに積んで送信トリガー2段構え
+             (busy中は両関数とも内部で即リターン。
+              応答完了時のfinallyで張り直されるため取りこぼしなし) */
+          pendingBuffer += (pendingBuffer ? "\n" : "") + text;
+          armSilenceTimer();  // 【環境A】2秒無音デバウンス
+          armForceTimer();    // 【環境B】10秒強制送信(作動中なら延長しない)
+        }
+        /* モード0:AI通信なし。バッファに積まない(トークン消費ゼロ) */
       } else {
         /* ===== 認識途中:まだ話している → 2秒タイマーを延長 ===== */
         interim += text;
@@ -487,7 +542,7 @@ function stopListening() {
   clearFlushTimers();
   setListeningUI(false);
   // 停止時、未送信分が残っていれば即送信(busy中なら応答完了時に処理される)
-  if (pendingBuffer.trim() && !busy) flushToGemini();
+  if (currentMode !== 0 && pendingBuffer.trim() && !busy) flushToGemini();
 }
 
 micToggleBtn.addEventListener("click", () => {
@@ -592,7 +647,7 @@ async function flushToGemini() {
     autoScroll(aiLog);
     busy = false;
     /* ===== 応答完了:未送信テキストが残っている場合のみ、
-       改めて安全にタイマーを張り直す(ここがv5の唯一の再送経路) ===== */
+       改めて安全にタイマーを張り直す(ここが唯一の再送経路) ===== */
     if (pendingBuffer.trim()) {
       armSilenceTimer();
       armForceTimer();
@@ -610,6 +665,11 @@ document.querySelectorAll(".mode-btn").forEach((btn) => {
     document.querySelectorAll(".mode-btn").forEach((b) =>
       b.classList.toggle("active", b === btn)
     );
+    if (currentMode === 0) {
+      /* モード0:AI通信を完全停止。タイマー全消去+未送信分も破棄 */
+      clearFlushTimers();
+      pendingBuffer = "";
+    }
   });
 });
 

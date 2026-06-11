@@ -1,6 +1,6 @@
 /* =========================================================
    AI Listener — 縦置きタブレット/スマホ用 常時傍聴アシスタント
-   計器系ダークUI / 上下3分割レイアウト(圧縮版)
+   計器系ダークUI / 上下3分割レイアウト(圧縮版・4モード・印刷対応)
    ========================================================= */
 
 :root {
@@ -11,9 +11,10 @@
   --ink:       #DCE3EC;
   --dim:       #7D8896;
   --rec:       #FF5A5F;
-  --mode1:     #53C7F0;   /* 会話     : シアン */
-  --mode2:     #F5A95B;   /* 単語補足 : アンバー */
-  --mode3:     #7FD18C;   /* アドバイス: グリーン */
+  --mode0:     #9AA7B5;   /* 文字起こし: グレー */
+  --mode1:     #53C7F0;   /* 会話       : シアン */
+  --mode2:     #F5A95B;   /* 単語補足   : アンバー */
+  --mode3:     #7FD18C;   /* アドバイス : グリーン */
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
   --sans: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", sans-serif;
 }
@@ -44,7 +45,7 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 10px;
+  padding: 4px 8px;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
 }
@@ -52,7 +53,7 @@ html, body {
 .status-left {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   font-family: var(--mono);
   font-size: 11px;
   letter-spacing: 0.1em;
@@ -102,11 +103,11 @@ html, body {
   font-size: 10px;
   color: var(--dim);
   letter-spacing: 0.05em;
-  min-width: 56px;
+  min-width: 52px;
 }
 .snr-label.hot { color: var(--rec); }
 
-.status-right { display: flex; gap: 5px; }
+.status-right { display: flex; gap: 4px; }
 
 .icon-btn {
   display: flex;
@@ -118,6 +119,7 @@ html, body {
   background: var(--panel-2);
   color: var(--ink);
   cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 .icon-btn:active { background: var(--line); }
 .icon-btn.mic-on { color: var(--rec); border-color: var(--rec); }
@@ -191,6 +193,7 @@ html, body {
   word-break: break-word;
   white-space: pre-wrap;
 }
+.ai-entry.mode-0 { border-left-color: var(--mode0); }
 .ai-entry.mode-1 { border-left-color: var(--mode1); }
 .ai-entry.mode-2 { border-left-color: var(--mode2); }
 .ai-entry.mode-3 { border-left-color: var(--mode3); }
@@ -219,12 +222,12 @@ html, body {
 }
 @keyframes blink { 50% { opacity: 0; } }
 
-/* ===== 中央:モードバー(小型1行ボタン) ===== */
+/* ===== 中央:モードバー(小型1行ボタン・4モード) ===== */
 #modeBar {
   flex: 0 0 auto;
   display: flex;
-  gap: 6px;
-  padding: 5px 10px;
+  gap: 5px;
+  padding: 5px 8px;
   background: var(--panel-2);
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
@@ -236,13 +239,14 @@ html, body {
   flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 8px 4px;
+  gap: 4px;
+  padding: 8px 2px;
   border-radius: 9px;
   border: 1px solid var(--line);
   background: var(--panel);
   color: var(--dim);
   cursor: pointer;
+  min-width: 0;
   /* 物理ボタン風の立体感 */
   box-shadow: 0 2px 0 #0A0E13, inset 0 1px 0 rgba(255,255,255,0.04);
   transition: transform 0.06s, box-shadow 0.06s;
@@ -259,12 +263,16 @@ html, body {
   opacity: 0.7;
 }
 .mode-name {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 選択中ハイライト(モード別カラー) */
 .mode-btn.active { color: var(--bg); }
+.mode-btn.mode-0.active { background: var(--mode0); border-color: var(--mode0); }
 .mode-btn.mode-1.active { background: var(--mode1); border-color: var(--mode1); }
 .mode-btn.mode-2.active { background: var(--mode2); border-color: var(--mode2); }
 .mode-btn.mode-3.active { background: var(--mode3); border-color: var(--mode3); }
@@ -355,4 +363,68 @@ button:focus-visible, input:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .live-dot, .ai-entry.streaming::after { animation: none; }
   .waveform i { transition: none; }
+}
+
+/* =========================================================
+   印刷用スタイル:白背景・全文出力・操作UI非表示
+   ========================================================= */
+@media print {
+  html, body {
+    background: #fff;
+    color: #000;
+    height: auto;
+  }
+  #statusbar, #modeBar, .interim-line, .modal { display: none !important; }
+  #app {
+    display: block;
+    height: auto;
+    padding: 0;
+  }
+  .pane {
+    display: block;
+    background: #fff !important;
+    border: none !important;
+  }
+  .scroll-area {
+    overflow: visible;
+    height: auto;
+    padding: 0;
+  }
+  /* セクション見出しを印刷時に付与 */
+  #transcriptPane::before {
+    content: "■ 文字起こし(音声入力)";
+    display: block;
+    font-weight: 700;
+    font-size: 14px;
+    margin: 8px 0 6px;
+    color: #000;
+  }
+  #aiPane::before {
+    content: "■ AI回答(音声出力)";
+    display: block;
+    font-weight: 700;
+    font-size: 14px;
+    margin: 16px 0 6px;
+    color: #000;
+  }
+  .ts-entry {
+    color: #000;
+    font-size: 11pt;
+    line-height: 1.5;
+    page-break-inside: avoid;
+  }
+  .ts-entry time { color: #555; }
+  .ai-entry {
+    background: #fff !important;
+    color: #000;
+    border: 1px solid #bbb;
+    border-left-width: 3px;
+    border-radius: 4px;
+    font-size: 11pt;
+    page-break-inside: avoid;
+  }
+  .ai-entry .ai-head { color: #555; }
+  .ai-entry.error { color: #900; }
+  .ai-entry.streaming::after { content: none; }
+  .placeholder { display: none; }
 }
