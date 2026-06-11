@@ -1,5 +1,5 @@
 /* =========================================================
-   AI Listener — app.js (v18)
+   AI Listener — app.js (v19)
    常時傍聴 → 文字起こし確定をトリガーに2段構えでGeminiへ送信
 
    v13の変更:
@@ -61,7 +61,7 @@ function loadSettings() {
 let settings = loadSettings();
 
 /* ===== バージョン(デプロイ反映確認用。リリースごとに更新) ===== */
-const APP_VERSION = "v18";
+const APP_VERSION = "v19";
 
 /* ===== 送信トリガーの時間定数 ===== */
 const SILENCE_FLUSH_MS  = 1500;   // 環境A:確定後この時間認識が途絶えたら送信

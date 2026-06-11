@@ -143,12 +143,12 @@ html, body {
   border-color: var(--rec);
 }
 
-/* ===== 分割エリア:既定は上下(縦画面)。横画面/広い画面では左右 ===== */
+/* ===== 分割エリア:常に左右分割(文字起こし左・AI回答右) ===== */
 #splitArea {
   flex: 1 1 0;
   min-height: 0;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
 }
 
 .pane {
@@ -164,22 +164,22 @@ html, body {
 #transcriptPane { flex-grow: 40; background: var(--bg); }
 #aiPane         { flex-grow: 60; background: var(--panel); }
 
-/* ===== 仕切りバー:ドラッグで分割比を変更 ===== */
+/* ===== 仕切りバー:左右ドラッグで分割比を変更 ===== */
 #splitDivider {
   flex: 0 0 18px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--panel-2);
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  cursor: row-resize;
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  cursor: col-resize;
   touch-action: none;          /* ドラッグ中の画面スクロールを防止 */
   -webkit-tap-highlight-color: transparent;
 }
 #splitDivider .grip {
-  width: 44px;
-  height: 5px;
+  width: 5px;
+  height: 44px;
   border-radius: 3px;
   background: var(--dim);
   opacity: 0.55;
@@ -187,22 +187,6 @@ html, body {
 }
 #splitDivider.dragging .grip,
 #splitDivider:active .grip { opacity: 1; background: var(--mode1); }
-
-/* ===== 横画面・広い画面(PC/タブレット横):左右分割 ===== */
-@media (orientation: landscape), (min-width: 700px) {
-  #splitArea { flex-direction: row; }
-  #splitDivider {
-    flex: 0 0 18px;
-    border: none;
-    border-left: 1px solid var(--line);
-    border-right: 1px solid var(--line);
-    cursor: col-resize;
-  }
-  #splitDivider .grip {
-    width: 5px;
-    height: 44px;
-  }
-}
 
 /* ===== モード0(文字起こし):AI回答エリアと仕切りを隠して全画面化 ===== */
 #app.mode0 #aiPane,
