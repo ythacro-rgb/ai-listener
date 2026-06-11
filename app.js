@@ -1,21 +1,23 @@
 /* =========================================================
-   AI Listener — app.js (v4)
+   AI Listener — app.js (v5)
    常時傍聴 → 文字起こし確定をトリガーに2段構えでGeminiへ送信
 
-   v4の送信トリガー(recognition.onresult 起点):
-   【環境A:静かな場所】
-     テキスト確定(isFinal)後、認識イベントが2秒途絶えたら
-     即 tryFlush() → Geminiへ送信(レスポンス重視)。
-     interim(認識途中)が続いている間はタイマーを延長。
-   【環境B:騒音下】
-     バッファに未送信テキストが入った時点から10秒経過したら、
-     無音検知の有無に関わらず tryFlush(force=true) で強制送信。
-     強制送信は最小送信間隔をバイパスする(429クールダウンのみ尊重)。
-     送信実行時に両タイマーはクリア(null化)される。
+   v5の修正(リクエスト暴走対策):
+   - busy(AI応答中)の間は armSilenceTimer / armForceTimer /
+     tryFlush のすべてが即リターン。新規タイマーは一切作動しない。
+     応答中に確定したテキストは pendingBuffer に溜まるだけ。
+   - tryFlush 内の setTimeout による待ち合わせ再試行ループを完全撤廃。
+     送信条件(最小送信間隔・クールダウン)を満たさない場合は
+     単純にスキップし、ガード付きの armForceTimer() を1本だけ張る
+     (forceTimer作動中は即リターンするため重複は構造的に不可能)。
+   - AI応答完了時(finally)に pendingBuffer が残っている場合のみ、
+     改めて armSilenceTimer / armForceTimer を張り直す。
+   - 503(過負荷)も429と同様に30秒クールダウン対象に追加。
 
-   WebAudioのVAD(SNR比率)は補助トリガーとして残置:
-     発話終了を検出できた場合は2秒を待たず即送信を試みる。
-     VADが機能しない環境でも上記2トリガーで必ず送信される。
+   送信トリガー(recognition.onresult 起点):
+   【環境A:静かな場所】確定後、認識イベントが2秒途絶えたら送信
+   【環境B:騒音下】未送信テキスト発生から10秒で強制送信
+     (最小送信間隔をバイパス。クールダウンのみ尊重)
    ========================================================= */
 
 import { GoogleGenerativeAI } from "https://esm.run/@google/generative-ai";
@@ -46,10 +48,10 @@ function loadSettings() {
 let settings = loadSettings();
 
 /* ===== 送信トリガーの時間定数 ===== */
-const SILENCE_FLUSH_MS = 2000;   // 環境A:確定後この時間認識が途絶えたら送信
-const FORCE_FLUSH_MS   = 10000;  // 環境B:未送信テキスト発生からこの時間で強制送信
-const COOLDOWN_429_MS  = 30000;  // 429受信後のクールダウン
-const MAX_OUTPUT_TOKENS = 256;   // 回答の長さ上限(出力トークン)
+const SILENCE_FLUSH_MS  = 2000;   // 環境A:確定後この時間認識が途絶えたら送信
+const FORCE_FLUSH_MS    = 10000;  // 環境B:未送信テキスト発生からこの時間で強制送信
+const COOLDOWN_MS       = 30000;  // 429/503受信後のクールダウン
+const MAX_OUTPUT_TOKENS = 256;    // 回答の長さ上限(出力トークン)
 
 /* ===== モード定義(プロンプト動的切り替え・短文指定) ===== */
 const MODES = {
@@ -110,15 +112,14 @@ let pendingBuffer = "";      // まだAIに送っていない確定テキスト
 let fullLog       = [];      // 確定テキスト全履歴(文脈用)
 let genAI         = null;
 let modelCache    = { key: "", name: "", model: null };
-let busy          = false;   // Gemini応答中フラグ
+let busy          = false;   // Gemini応答中フラグ(これが全タイマーの大元ガード)
 let lastRequestAt = 0;       // 最後にGeminiへ送信した時刻
-let cooldownUntil = 0;       // 429クールダウン終了時刻
+let cooldownUntil = 0;       // 429/503クールダウン終了時刻
 let lastError     = null;    // {div, body, text, count} 同一エラーの集約用
 
-/* ===== 送信トリガー用タイマー ===== */
-let silenceTimer  = null;    // 環境A:2秒無音デバウンス
-let forceTimer    = null;    // 環境B:10秒強制送信
-let intervalTimer = null;    // 最小送信間隔の待ち合わせ(通常送信のみ)
+/* ===== 送信トリガー用タイマー(intervalTimerは撤廃) ===== */
+let silenceTimer = null;     // 環境A:2秒無音デバウンス
+let forceTimer   = null;     // 環境B:10秒強制送信
 
 /* ===== VAD状態(補助トリガー) ===== */
 let audioCtx    = null;
@@ -209,11 +210,13 @@ function appendTranscript(text) {
 }
 
 /* =========================================================
-   送信トリガー管理
+   送信トリガー管理(busy中は一切作動しない)
    ========================================================= */
 
-/* 環境A:2秒無音デバウンス。認識イベントが来るたびに張り直す */
+/* 環境A:2秒無音デバウンス。認識イベントが来るたびに張り直す。
+   busy中は新規タイマーを絶対に走らせない(応答完了時に張り直される) */
 function armSilenceTimer() {
+  if (busy) return;
   clearTimeout(silenceTimer);
   silenceTimer = setTimeout(() => {
     silenceTimer = null;
@@ -221,9 +224,11 @@ function armSilenceTimer() {
   }, SILENCE_FLUSH_MS);
 }
 
-/* 環境B:10秒強制送信。未送信テキスト発生時に1回だけ張る(延長しない) */
+/* 環境B:10秒強制送信。未送信テキスト発生時に1回だけ張る(延長しない)。
+   busy中・作動中は即リターン → 同時に存在できるforceTimerは常に最大1本 */
 function armForceTimer() {
-  if (forceTimer) return; // 既に作動中なら延長しない(これが「詰まり防止」の要)
+  if (busy) return;
+  if (forceTimer) return;
   forceTimer = setTimeout(() => {
     forceTimer = null;
     tryFlush(true); // 最小送信間隔をバイパスして強制送信
@@ -232,27 +237,26 @@ function armForceTimer() {
 
 /* 両タイマーのクリア(送信実行時・停止時に呼ぶ) */
 function clearFlushTimers() {
-  clearTimeout(silenceTimer);  silenceTimer = null;
-  clearTimeout(forceTimer);    forceTimer = null;
-  clearTimeout(intervalTimer); intervalTimer = null;
+  clearTimeout(silenceTimer); silenceTimer = null;
+  clearTimeout(forceTimer);   forceTimer = null;
 }
 
-/* 送信ゲート:
-   - force=false(通常): 最小送信間隔・429クールダウンの両方を待つ
-   - force=true (強制): 最小送信間隔をバイパス。429クールダウンのみ尊重
-   busy中は何もしない(応答完了時のfinallyで再度tryFlushされる) */
+/* 送信ゲート(スリム化版):
+   - busy中は即リターン(再試行予約もしない)
+   - 条件を満たさなければ単純にスキップ。再送の機会は
+     ガード付き armForceTimer() 1本のみ(重複不可能)に委ねる
+   - force=true は最小送信間隔をバイパス。クールダウンのみ尊重 */
 function tryFlush(force) {
-  if (!pendingBuffer.trim()) return;
   if (busy) return;
+  if (!pendingBuffer.trim()) return;
 
   const now = Date.now();
-  const waitCooldown = cooldownUntil - now;
-  const waitInterval = force ? 0 : lastRequestAt + settings.minInterval * 1000 - now;
-  const wait = Math.max(waitCooldown, waitInterval);
-
-  if (wait > 0) {
-    clearTimeout(intervalTimer);
-    intervalTimer = setTimeout(() => tryFlush(force), wait + 50);
+  if (now < cooldownUntil) {           // 429/503クールダウン中
+    armForceTimer();                   // クールダウン明け以降の再送機会を1本だけ確保
+    return;
+  }
+  if (!force && now - lastRequestAt < settings.minInterval * 1000) {
+    armForceTimer();                   // 間隔未達:スキップし、強制送信に委ねる
     return;
   }
   flushToGemini();
@@ -339,10 +343,10 @@ function vadTick() {
     // ===== 閾値割れ:猶予時間の計測 =====
     if (!belowSince) belowSince = now;
     if (now - belowSince >= settings.vadHang) {
-      // ===== 発話終了(補助トリガー):2秒を待たず即送信を試みる =====
+      // ===== 発話終了(補助トリガー):2秒を待たず送信を試みる =====
       speaking = false;
       belowSince = 0;
-      tryFlush(false);
+      tryFlush(false); // busy中・条件未達なら内部で安全にスキップされる
     }
   }
 
@@ -395,18 +399,16 @@ function createRecognition() {
       if (!text) continue;
 
       if (r.isFinal) {
-        /* ===== テキスト確定:表示+バッファ+送信トリガー2段構え ===== */
+        /* ===== テキスト確定:表示+バッファ ===== */
         appendTranscript(text);
         fullLog.push(text);
         pendingBuffer += (pendingBuffer ? "\n" : "") + text;
         lastFinalAt = Date.now();
 
-        // 【環境A】確定直後から2秒無音デバウンス開始(次の認識イベントで延長)
-        armSilenceTimer();
-
-        // 【環境B】未送信テキストがある限り、最初の確定から10秒で強制送信。
-        //          既に作動中なら延長しない(騒音下の詰まり防止)
-        armForceTimer();
+        /* 送信トリガー(busy中は両関数とも内部で即リターン。
+           応答完了時のfinallyで張り直されるため取りこぼしなし) */
+        armSilenceTimer();  // 【環境A】2秒無音デバウンス
+        armForceTimer();    // 【環境B】10秒強制送信(作動中なら延長しない)
       } else {
         /* ===== 認識途中:まだ話している → 2秒タイマーを延長 ===== */
         interim += text;
@@ -484,7 +486,7 @@ function stopListening() {
   stopWatchdog();
   clearFlushTimers();
   setListeningUI(false);
-  // 停止時、未送信分が残っていれば即送信(間隔バイパス)
+  // 停止時、未送信分が残っていれば即送信(busy中なら応答完了時に処理される)
   if (pendingBuffer.trim() && !busy) flushToGemini();
 }
 
@@ -531,20 +533,24 @@ function appendAIEntry(mode, text, opts = {}) {
 }
 
 async function flushToGemini() {
+  if (busy) return; // 二重送信の最終防壁
   const newText = pendingBuffer.trim();
   if (!newText) return;
 
-  /* ===== 送信実行:両トリガータイマーをクリア(null化) ===== */
+  /* ===== 送信実行:先にbusyを立て、全タイマーをクリア(null化) =====
+     以降、応答完了まで armSilenceTimer / armForceTimer / tryFlush は
+     すべて即リターンするため、新規タイマー・新規送信は発生しない */
+  busy = true;
   clearFlushTimers();
 
   if (!settings.apiKey) {
+    busy = false;
     pendingBuffer = "";
     showError("APIキー未設定: 歯車アイコンから設定");
     return;
   }
 
   pendingBuffer = "";
-  busy = true;
   lastRequestAt = Date.now();
 
   const mode = currentMode;
@@ -573,14 +579,15 @@ async function flushToGemini() {
     const text = shortError(err);
     entry.div.remove(); // 空のストリーミング枠は消し、集約エラー表示に置き換え
     showError(text);
-    if (text.startsWith("429")) {
-      cooldownUntil = Date.now() + COOLDOWN_429_MS;
+    if (text.startsWith("429") || text.startsWith("503")) {
+      cooldownUntil = Date.now() + COOLDOWN_MS;
     }
   } finally {
     entry.div.classList.remove("streaming");
     autoScroll(aiLog);
     busy = false;
-    // 応答中に新しい発話が溜まっていたら、改めてトリガーを張り直す
+    /* ===== 応答完了:未送信テキストが残っている場合のみ、
+       改めて安全にタイマーを張り直す(ここがv5の唯一の再送経路) ===== */
     if (pendingBuffer.trim()) {
       armSilenceTimer();
       armForceTimer();
