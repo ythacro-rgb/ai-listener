@@ -1,16 +1,21 @@
 /* =========================================================
-   AI Listener — app.js (v3)
-   常時傍聴 → SNR比率ベースVADで発話区間を検出 →
-   最小送信間隔でまとめて Gemini に送信(429対策)し、
-   短い回答をストリーミング表示する。
+   AI Listener — app.js (v4)
+   常時傍聴 → 文字起こし確定をトリガーに2段構えでGeminiへ送信
 
-   v3の変更:
-   - 最小送信間隔(デフォルト15秒):間隔内の発話はバッファに
-     溜め、間隔経過時にまとめて1リクエストで送信
-   - 429受信時は30秒の自動クールダウン
-   - エラーは「429 レート制限」のような1行表示。
-     同一エラー連続時は新規エントリを作らず ×N カウント表示
-   - 全モードのプロンプトを短文指定+maxOutputTokensで回答を短縮
+   v4の送信トリガー(recognition.onresult 起点):
+   【環境A:静かな場所】
+     テキスト確定(isFinal)後、認識イベントが2秒途絶えたら
+     即 tryFlush() → Geminiへ送信(レスポンス重視)。
+     interim(認識途中)が続いている間はタイマーを延長。
+   【環境B:騒音下】
+     バッファに未送信テキストが入った時点から10秒経過したら、
+     無音検知の有無に関わらず tryFlush(force=true) で強制送信。
+     強制送信は最小送信間隔をバイパスする(429クールダウンのみ尊重)。
+     送信実行時に両タイマーはクリア(null化)される。
+
+   WebAudioのVAD(SNR比率)は補助トリガーとして残置:
+     発話終了を検出できた場合は2秒を待たず即送信を試みる。
+     VADが機能しない環境でも上記2トリガーで必ず送信される。
    ========================================================= */
 
 import { GoogleGenerativeAI } from "https://esm.run/@google/generative-ai";
@@ -39,6 +44,12 @@ function loadSettings() {
 }
 
 let settings = loadSettings();
+
+/* ===== 送信トリガーの時間定数 ===== */
+const SILENCE_FLUSH_MS = 2000;   // 環境A:確定後この時間認識が途絶えたら送信
+const FORCE_FLUSH_MS   = 10000;  // 環境B:未送信テキスト発生からこの時間で強制送信
+const COOLDOWN_429_MS  = 30000;  // 429受信後のクールダウン
+const MAX_OUTPUT_TOKENS = 256;   // 回答の長さ上限(出力トークン)
 
 /* ===== モード定義(プロンプト動的切り替え・短文指定) ===== */
 const MODES = {
@@ -72,9 +83,6 @@ const MODES = {
   },
 };
 
-const MAX_OUTPUT_TOKENS = 256;   // 回答の長さ上限(出力トークン)
-const COOLDOWN_429_MS   = 30000; // 429受信後のクールダウン
-
 /* ===== DOM ===== */
 const $ = (id) => document.getElementById(id);
 const transcriptLog    = $("transcriptLog");
@@ -103,13 +111,16 @@ let fullLog       = [];      // 確定テキスト全履歴(文脈用)
 let genAI         = null;
 let modelCache    = { key: "", name: "", model: null };
 let busy          = false;   // Gemini応答中フラグ
-let fallbackTimer = null;    // VADが終了を検出できない場合の保険
 let lastRequestAt = 0;       // 最後にGeminiへ送信した時刻
 let cooldownUntil = 0;       // 429クールダウン終了時刻
-let intervalTimer = null;    // 最小送信間隔待ちタイマー
 let lastError     = null;    // {div, body, text, count} 同一エラーの集約用
 
-/* ===== VAD状態 ===== */
+/* ===== 送信トリガー用タイマー ===== */
+let silenceTimer  = null;    // 環境A:2秒無音デバウンス
+let forceTimer    = null;    // 環境B:10秒強制送信
+let intervalTimer = null;    // 最小送信間隔の待ち合わせ(通常送信のみ)
+
+/* ===== VAD状態(補助トリガー) ===== */
 let audioCtx    = null;
 let mediaStream = null;
 let analyser    = null;
@@ -126,7 +137,6 @@ const VAD_INTERVAL_MS      = 50;     // RMS測定周期
 const NOISE_FLOOR_MIN      = 0.0008; // フロア下限(完全無音対策)
 const FLOOR_RISE_ALPHA     = 0.005;  // フロア上昇は遅く(発話を雑音と誤学習しない)
 const FLOOR_FALL_ALPHA     = 0.05;   // フロア下降は速く(静かになったら追従)
-const FALLBACK_FLUSH_MS    = 6000;   // テキスト確定後、これだけ経てば送信トリガー
 const WATCHDOG_MS          = 5000;   // 認識エンジン監視周期
 const RESTART_IF_SILENT_MS = 25000;  // 音声があるのにテキストが来ない時間 → 再起動
 
@@ -199,7 +209,57 @@ function appendTranscript(text) {
 }
 
 /* =========================================================
-   VAD:WebAudioによるSNR比率検知
+   送信トリガー管理
+   ========================================================= */
+
+/* 環境A:2秒無音デバウンス。認識イベントが来るたびに張り直す */
+function armSilenceTimer() {
+  clearTimeout(silenceTimer);
+  silenceTimer = setTimeout(() => {
+    silenceTimer = null;
+    tryFlush(false);
+  }, SILENCE_FLUSH_MS);
+}
+
+/* 環境B:10秒強制送信。未送信テキスト発生時に1回だけ張る(延長しない) */
+function armForceTimer() {
+  if (forceTimer) return; // 既に作動中なら延長しない(これが「詰まり防止」の要)
+  forceTimer = setTimeout(() => {
+    forceTimer = null;
+    tryFlush(true); // 最小送信間隔をバイパスして強制送信
+  }, FORCE_FLUSH_MS);
+}
+
+/* 両タイマーのクリア(送信実行時・停止時に呼ぶ) */
+function clearFlushTimers() {
+  clearTimeout(silenceTimer);  silenceTimer = null;
+  clearTimeout(forceTimer);    forceTimer = null;
+  clearTimeout(intervalTimer); intervalTimer = null;
+}
+
+/* 送信ゲート:
+   - force=false(通常): 最小送信間隔・429クールダウンの両方を待つ
+   - force=true (強制): 最小送信間隔をバイパス。429クールダウンのみ尊重
+   busy中は何もしない(応答完了時のfinallyで再度tryFlushされる) */
+function tryFlush(force) {
+  if (!pendingBuffer.trim()) return;
+  if (busy) return;
+
+  const now = Date.now();
+  const waitCooldown = cooldownUntil - now;
+  const waitInterval = force ? 0 : lastRequestAt + settings.minInterval * 1000 - now;
+  const wait = Math.max(waitCooldown, waitInterval);
+
+  if (wait > 0) {
+    clearTimeout(intervalTimer);
+    intervalTimer = setTimeout(() => tryFlush(force), wait + 50);
+    return;
+  }
+  flushToGemini();
+}
+
+/* =========================================================
+   VAD:WebAudioによるSNR比率検知(補助トリガー)
    ========================================================= */
 async function startVAD() {
   if (audioCtx) return;
@@ -212,7 +272,8 @@ async function startVAD() {
       },
     });
   } catch (err) {
-    showError("マイク取得失敗: " + shortError(err));
+    // VADが使えなくても2秒/10秒トリガーで送信されるため、警告のみで続行
+    showError("マイク解析不可(VAD無効): " + shortError(err));
     return;
   }
 
@@ -246,7 +307,7 @@ function stopVAD() {
   }
   analyser = null;
   speaking = false;
-  updateLevelUI(0, 0);
+  updateLevelUI(0);
 }
 
 function vadTick() {
@@ -278,44 +339,18 @@ function vadTick() {
     // ===== 閾値割れ:猶予時間の計測 =====
     if (!belowSince) belowSince = now;
     if (now - belowSince >= settings.vadHang) {
-      // ===== 発話終了 =====
+      // ===== 発話終了(補助トリガー):2秒を待たず即送信を試みる =====
       speaking = false;
       belowSince = 0;
-      onUtteranceEnd();
+      tryFlush(false);
     }
   }
 
-  updateLevelUI(ratio, rms);
-}
-
-// 発話終了イベント:最小送信間隔を考慮してAIへ
-function onUtteranceEnd() {
-  clearTimeout(fallbackTimer);
-  fallbackTimer = null;
-  tryFlush();
-}
-
-/* 送信ゲート:バッファあり・非busy・最小間隔経過・クールダウン外なら送信。
-   条件未達なら、満たされる時刻に再試行タイマーを張る(発話はバッファに溜まり続ける) */
-function tryFlush() {
-  if (!pendingBuffer.trim()) return;
-  if (busy) return; // 応答完了時(finally)に再度tryFlushされる
-
-  const now = Date.now();
-  const waitInterval = lastRequestAt + settings.minInterval * 1000 - now;
-  const waitCooldown = cooldownUntil - now;
-  const wait = Math.max(waitInterval, waitCooldown);
-
-  if (wait > 0) {
-    clearTimeout(intervalTimer);
-    intervalTimer = setTimeout(tryFlush, wait + 50);
-    return;
-  }
-  flushToGemini();
+  updateLevelUI(ratio);
 }
 
 /* レベルメーターとSNR表示の更新 */
-function updateLevelUI(ratio, rms) {
+function updateLevelUI(ratio) {
   const norm = Math.min(1, ratio / (settings.vadRatio * 2)); // 閾値の2倍で振り切り
   waveBars.forEach((bar, i) => {
     const h = 3 + norm * 9 * (0.6 + 0.4 * Math.sin(Date.now() / 90 + i));
@@ -358,23 +393,25 @@ function createRecognition() {
       const r = ev.results[i];
       const text = r[0].transcript.trim();
       if (!text) continue;
+
       if (r.isFinal) {
+        /* ===== テキスト確定:表示+バッファ+送信トリガー2段構え ===== */
         appendTranscript(text);
         fullLog.push(text);
         pendingBuffer += (pendingBuffer ? "\n" : "") + text;
         lastFinalAt = Date.now();
 
-        // VAD未検出のまま流れ続ける場合の保険:一定時間後に送信トリガー
-        clearTimeout(fallbackTimer);
-        fallbackTimer = setTimeout(() => {
-          if (!speaking) onUtteranceEnd();
-        }, FALLBACK_FLUSH_MS);
+        // 【環境A】確定直後から2秒無音デバウンス開始(次の認識イベントで延長)
+        armSilenceTimer();
 
-        // 既に発話が終わっている(VADが先に終了を検出済み)なら送信ゲートへ
-        if (!speaking) tryFlush();
+        // 【環境B】未送信テキストがある限り、最初の確定から10秒で強制送信。
+        //          既に作動中なら延長しない(騒音下の詰まり防止)
+        armForceTimer();
       } else {
+        /* ===== 認識途中:まだ話している → 2秒タイマーを延長 ===== */
         interim += text;
         lastFinalAt = Date.now(); // interimが来ている間はエンジン生存とみなす
+        if (silenceTimer) armSilenceTimer();
       }
     }
     interimLine.textContent = interim;
@@ -445,12 +482,9 @@ function stopListening() {
   if (recognition) try { recognition.stop(); } catch (_) {}
   stopVAD();
   stopWatchdog();
-  clearTimeout(fallbackTimer);
-  fallbackTimer = null;
-  clearTimeout(intervalTimer);
-  intervalTimer = null;
+  clearFlushTimers();
   setListeningUI(false);
-  // 停止時、未送信分が残っていれば送る(最小間隔は無視して即時)
+  // 停止時、未送信分が残っていれば即送信(間隔バイパス)
   if (pendingBuffer.trim() && !busy) flushToGemini();
 }
 
@@ -500,6 +534,9 @@ async function flushToGemini() {
   const newText = pendingBuffer.trim();
   if (!newText) return;
 
+  /* ===== 送信実行:両トリガータイマーをクリア(null化) ===== */
+  clearFlushTimers();
+
   if (!settings.apiKey) {
     pendingBuffer = "";
     showError("APIキー未設定: 歯車アイコンから設定");
@@ -543,8 +580,11 @@ async function flushToGemini() {
     entry.div.classList.remove("streaming");
     autoScroll(aiLog);
     busy = false;
-    // 応答中・クールダウン中に溜まった発話があれば送信ゲートへ
-    if (pendingBuffer.trim() && !speaking) tryFlush();
+    // 応答中に新しい発話が溜まっていたら、改めてトリガーを張り直す
+    if (pendingBuffer.trim()) {
+      armSilenceTimer();
+      armForceTimer();
+    }
   }
 }
 
@@ -605,6 +645,7 @@ $("clearLogBtn").addEventListener("click", () => {
   fullLog = [];
   pendingBuffer = "";
   lastError = null;
+  clearFlushTimers();
   closeSettings();
 });
 
