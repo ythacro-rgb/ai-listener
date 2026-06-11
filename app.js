@@ -1,5 +1,5 @@
 /* =========================================================
-   AI Listener — app.js (v5)
+   AI Listener — app.js (v6)
    常時傍聴 → 文字起こし確定をトリガーに2段構えでGeminiへ送信
 
    v5の修正(リクエスト暴走対策):
@@ -51,7 +51,7 @@ let settings = loadSettings();
 const SILENCE_FLUSH_MS  = 2000;   // 環境A:確定後この時間認識が途絶えたら送信
 const FORCE_FLUSH_MS    = 10000;  // 環境B:未送信テキスト発生からこの時間で強制送信
 const COOLDOWN_MS       = 30000;  // 429/503受信後のクールダウン
-const MAX_OUTPUT_TOKENS = 256;    // 回答の長さ上限(出力トークン)
+const MAX_OUTPUT_TOKENS = 1024;   // 回答の長さ上限(思考トークン含む)
 
 /* ===== モード定義(プロンプト動的切り替え・短文指定) ===== */
 const MODES = {
@@ -508,7 +508,12 @@ function getModel() {
   genAI = new GoogleGenerativeAI(settings.apiKey);
   const model = genAI.getGenerativeModel({
     model: settings.model,
-    generationConfig: { maxOutputTokens: MAX_OUTPUT_TOKENS },
+    generationConfig: {
+      maxOutputTokens: MAX_OUTPUT_TOKENS,
+      // gemini-2.5系は思考(thinking)トークンがmaxOutputTokensを消費し、
+      // 本文が数文字で切れたり空になるため、思考を無効化する(応答も速くなる)
+      thinkingConfig: { thinkingBudget: 0 },
+    },
   });
   modelCache = { key: settings.apiKey, name: settings.model, model };
   return model;
