@@ -1,6 +1,7 @@
 /* =========================================================
-   AI Listener — 縦置きタブレット/スマホ用 常時傍聴アシスタント
-   計器系ダークUI / 上下3分割レイアウト(4モード・印刷対応)
+   AI Listener — 常時傍聴アシスタント
+   計器系ダークUI / 横画面・PCは左右分割、縦画面は上下分割(自動)
+   仕切りバーをドラッグで分割比を変更可能
    ========================================================= */
 
 :root {
@@ -30,7 +31,7 @@ html, body {
   -webkit-text-size-adjust: 100%;
 }
 
-/* ===== 全体レイアウト:100dvhを上下3分割 ===== */
+/* ===== 全体レイアウト ===== */
 #app {
   display: flex;
   flex-direction: column;
@@ -39,7 +40,7 @@ html, body {
   padding-bottom: env(safe-area-inset-bottom);
 }
 
-/* ===== ステータスバー(圧縮) ===== */
+/* ===== ステータスバー ===== */
 #statusbar {
   flex: 0 0 auto;
   display: flex;
@@ -135,23 +136,78 @@ html, body {
   -webkit-tap-highlight-color: transparent;
 }
 .icon-btn:active { background: var(--line); }
-/* マイクON時:赤点灯(元の表示) */
+/* マイクON時:赤点灯 */
 .icon-btn.mic-on {
   color: #fff;
   background: var(--rec);
   border-color: var(--rec);
 }
 
-/* ===== 上下のペイン:下(AI回答)を広く ===== */
-.pane {
-  position: relative;
-  min-height: 0;          /* flex子のスクロールに必須 */
+/* ===== 分割エリア:既定は上下(縦画面)。横画面/広い画面では左右 ===== */
+#splitArea {
+  flex: 1 1 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
-#transcriptPane { flex: 1 1 0;   background: var(--bg); }
-#aiPane         { flex: 1.8 1 0; background: var(--panel); border-top: 1px solid var(--line); }
+.pane {
+  position: relative;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  flex-basis: 0;
+}
+
+/* 分割比はJSが flex-grow で制御(初期値: 文字起こし40 : AI60) */
+#transcriptPane { flex-grow: 40; background: var(--bg); }
+#aiPane         { flex-grow: 60; background: var(--panel); }
+
+/* ===== 仕切りバー:ドラッグで分割比を変更 ===== */
+#splitDivider {
+  flex: 0 0 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel-2);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  cursor: row-resize;
+  touch-action: none;          /* ドラッグ中の画面スクロールを防止 */
+  -webkit-tap-highlight-color: transparent;
+}
+#splitDivider .grip {
+  width: 44px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--dim);
+  opacity: 0.55;
+  pointer-events: none;
+}
+#splitDivider.dragging .grip,
+#splitDivider:active .grip { opacity: 1; background: var(--mode1); }
+
+/* ===== 横画面・広い画面(PC/タブレット横):左右分割 ===== */
+@media (orientation: landscape), (min-width: 700px) {
+  #splitArea { flex-direction: row; }
+  #splitDivider {
+    flex: 0 0 18px;
+    border: none;
+    border-left: 1px solid var(--line);
+    border-right: 1px solid var(--line);
+    cursor: col-resize;
+  }
+  #splitDivider .grip {
+    width: 5px;
+    height: 44px;
+  }
+}
+
+/* ===== モード0(文字起こし):AI回答エリアと仕切りを隠して全画面化 ===== */
+#app.mode0 #aiPane,
+#app.mode0 #splitDivider { display: none; }
+#app.mode0 #transcriptPane { flex-grow: 1 !important; }
 
 /* 標準のタッチスクロールのみ(独自ホイールUIなし) */
 .scroll-area {
@@ -240,7 +296,7 @@ html, body {
 }
 @keyframes blink { 50% { opacity: 0; } }
 
-/* ===== 中央:モードバー(小型1行ボタン・4モード) ===== */
+/* ===== 最下部:モードバー(小型1行ボタン・4モード) ===== */
 #modeBar {
   flex: 0 0 auto;
   display: flex;
@@ -248,7 +304,6 @@ html, body {
   padding: 5px 8px;
   background: var(--panel-2);
   border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
 }
 
 .mode-btn {
@@ -342,7 +397,13 @@ html, body {
   color: var(--dim);
   margin-bottom: 5px;
 }
-.field input {
+.field-label b {
+  color: var(--mode1);
+  font-family: var(--mono);
+}
+.field input[type="text"],
+.field input[type="password"],
+.field input[type="number"] {
   width: 100%;
   padding: 10px;
   font-size: 16px;   /* 16px未満だとiOSがフォーカス時に自動ズームする */
@@ -351,6 +412,11 @@ html, body {
   border: 1px solid var(--line);
   border-radius: 8px;
   font-family: var(--mono);
+}
+.field input[type="range"] {
+  width: 100%;
+  height: 30px;
+  accent-color: var(--mode1);
 }
 .field input:focus {
   outline: 2px solid var(--mode1);
@@ -403,8 +469,8 @@ button:focus-visible, input:focus-visible {
     color: #000;
     height: auto;
   }
-  #statusbar, #modeBar, .interim-line, .modal { display: none !important; }
-  #app {
+  #statusbar, #modeBar, .interim-line, .modal, #splitDivider { display: none !important; }
+  #app, #splitArea {
     display: block;
     height: auto;
     padding: 0;
@@ -436,6 +502,8 @@ button:focus-visible, input:focus-visible {
     margin: 16px 0 6px;
     color: #000;
   }
+  /* モード0で非表示でも、印刷時はAIエリアも出す(空なら見出しのみ) */
+  #app.mode0 #aiPane { display: block; }
   .ts-entry {
     color: #000;
     font-size: 11pt;

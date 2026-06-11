@@ -1,22 +1,23 @@
 /* =========================================================
-   AI Listener — app.js (v11)
+   AI Listener — app.js (v13)
    常時傍聴 → 文字起こし確定をトリガーに2段構えでGeminiへ送信
 
-   v7の追加:
-   - モード0「文字起こし」: AI通信を完全停止(トークン消費ゼロ)。
-     確定テキストはpendingBufferに積まず、送信タイマーも作動しない。
-     文脈履歴(fullLog)には記録されるため、後でモード1〜3に
-     切り替えた際の文脈としては活用される。
-   - テキスト保存ボタン: 文字起こし(音声入力)とAI回答(音声出力)を
-     1つの.txtファイルとしてダウンロード。
-   - 印刷ボタン: window.print()。印刷用CSSで両ログを白背景・全文出力。
+   v13の変更:
+   - レイアウト: 横画面/PCは左右分割(文字起こし左・AI右)、
+     縦画面は上下分割。仕切りバーのドラッグで分割比を変更・保存。
+   - モード0(文字起こし)はAIエリアを隠して全画面化。
+   - 無音自動停止: 発話が設定時間(初期10分)なければマイク自動OFF。
+   - テンポ改善: 無音デバウンス2秒→1.5秒、最小送信間隔の初期値8秒。
+   - 既定モデルを gemini-3.1-flash-lite-preview に変更。
+     Gemini 3系は thinkingLevel、2.5系は thinkingBudget を自動切替
+     (両方同時指定は400エラーになるため)。
+   - タイムスタンプ: モード0は HH:MM:SS、その他は HH:MM。
 
-   送信トリガー(v5/v6から継続):
-   【環境A:静かな場所】確定後、認識イベントが2秒途絶えたら送信
+   送信トリガー(継続):
+   【環境A:静かな場所】確定後、認識イベントが1.5秒途絶えたら送信
    【環境B:騒音下】未送信テキスト発生から10秒で強制送信
      (最小送信間隔をバイパス。クールダウンのみ尊重)
    busy(AI応答中)の間は全タイマー・全送信が即リターン。
-   gemini-2.5系の思考トークンは無効化済み(文字切れ対策)。
    ========================================================= */
 
 import { GoogleGenerativeAI } from "https://esm.run/@google/generative-ai";
@@ -30,9 +31,11 @@ const LS = {
   minInterval: "ail_minInterval",
   mode:        "ail_mode",
   vadOn:       "ail_vadOn",
+  autoStop:    "ail_autoStop",
+  split:       "ail_split",
 };
 
-const DEFAULT_MODEL = "gemini-2.5-flash";
+const DEFAULT_MODEL = "gemini-3.1-flash-lite-preview";
 
 /* iOS(iPhone/iPad)判定:SpeechRecognitionとWebAudioのマイク競合があるため、
    iOSではVAD(音声レベル解析)を初期値OFFにする */
@@ -47,17 +50,21 @@ function loadSettings() {
     model:       localStorage.getItem(LS.model)    || DEFAULT_MODEL,
     vadRatio:    parseFloat(localStorage.getItem(LS.vadRatio) || "2.5"),
     vadHang:     parseInt(localStorage.getItem(LS.vadHang)  || "800", 10),
-    minInterval: parseInt(localStorage.getItem(LS.minInterval) || "15", 10),
+    minInterval: parseInt(localStorage.getItem(LS.minInterval) || "8", 10),
     mode:        parseInt(localStorage.getItem(LS.mode) || "1", 10),
-    // 未設定なら iOS はOFF、その他はON
     vadOn:       vadOnStored === null ? !IS_IOS : vadOnStored === "1",
+    autoStop:    parseInt(localStorage.getItem(LS.autoStop) || "10", 10),
+    split:       parseFloat(localStorage.getItem(LS.split) || "0.4"),
   };
 }
 
 let settings = loadSettings();
 
+/* ===== バージョン(デプロイ反映確認用。リリースごとに更新) ===== */
+const APP_VERSION = "v13";
+
 /* ===== 送信トリガーの時間定数 ===== */
-const SILENCE_FLUSH_MS  = 2000;   // 環境A:確定後この時間認識が途絶えたら送信
+const SILENCE_FLUSH_MS  = 1500;   // 環境A:確定後この時間認識が途絶えたら送信
 const FORCE_FLUSH_MS    = 10000;  // 環境B:未送信テキスト発生からこの時間で強制送信
 const COOLDOWN_MS       = 30000;  // 429/503受信後のクールダウン
 const MAX_OUTPUT_TOKENS = 1024;   // 回答の長さ上限(出力トークン)
@@ -101,11 +108,13 @@ const MODES = {
   },
 };
 
-/* ===== バージョン(デプロイ反映確認用。リリースごとに更新) ===== */
-const APP_VERSION = "v11";
-
 /* ===== DOM ===== */
 const $ = (id) => document.getElementById(id);
+const appRoot          = $("app");
+const splitArea        = $("splitArea");
+const splitDivider     = $("splitDivider");
+const transcriptPane   = $("transcriptPane");
+const aiPane           = $("aiPane");
 const transcriptLog    = $("transcriptLog");
 const interimLine      = $("interimLine");
 const aiLog            = $("aiLog");
@@ -122,9 +131,12 @@ const settingsModal    = $("settingsModal");
 const apiKeyInput      = $("apiKeyInput");
 const modelInput       = $("modelInput");
 const vadRatioInput    = $("vadRatioInput");
+const vadRatioVal      = $("vadRatioVal");
 const vadHangInput     = $("vadHangInput");
 const vadOnInput       = $("vadOnInput");
 const minIntervalInput = $("minIntervalInput");
+const autoStopInput    = $("autoStopInput");
+const verLabel         = $("verLabel");
 
 /* ===== 状態 ===== */
 let recognition   = null;
@@ -140,7 +152,7 @@ let cooldownUntil = 0;       // 429/503クールダウン終了時刻
 let lastError     = null;    // {div, body, text, count} 同一エラーの集約用
 
 /* ===== 送信トリガー用タイマー ===== */
-let silenceTimer = null;     // 環境A:2秒無音デバウンス
+let silenceTimer = null;     // 環境A:1.5秒無音デバウンス
 let forceTimer   = null;     // 環境B:10秒強制送信
 
 /* ===== VAD状態(補助トリガー) ===== */
@@ -166,11 +178,18 @@ const RESTART_IF_SILENT_MS = 25000;  // 音声があるのにテキストが来�
 /* =========================================================
    ユーティリティ
    ========================================================= */
-function nowHMS() {
+function pad2(n) { return String(n).padStart(2, "0"); }
+
+/* タイムスタンプ:モード0は秒まで、その他は分まで */
+function tsStamp() {
   const d = new Date();
-  return [d.getHours(), d.getMinutes(), d.getSeconds()]
-    .map((n) => String(n).padStart(2, "0"))
-    .join(":");
+  return currentMode === 0
+    ? `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
+    : `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+function aiStamp() {
+  const d = new Date();
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 
 // 下端付近にいる時だけ自動スクロール(過去ログ閲覧を邪魔しない)
@@ -217,6 +236,45 @@ function showError(text) {
 }
 
 /* =========================================================
+   レイアウト:分割比の適用とドラッグ、モード0全画面
+   ========================================================= */
+function applySplit() {
+  transcriptPane.style.flexGrow = String(Math.round(settings.split * 1000));
+  aiPane.style.flexGrow         = String(Math.round((1 - settings.split) * 1000));
+}
+
+function applyModeLayout() {
+  appRoot.classList.toggle("mode0", currentMode === 0);
+}
+
+let dragging = false;
+splitDivider.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  dragging = true;
+  splitDivider.classList.add("dragging");
+  splitDivider.setPointerCapture(e.pointerId);
+});
+splitDivider.addEventListener("pointermove", (e) => {
+  if (!dragging) return;
+  const rect = splitArea.getBoundingClientRect();
+  const isRow = getComputedStyle(splitArea).flexDirection === "row";
+  let r = isRow
+    ? (e.clientX - rect.left) / rect.width
+    : (e.clientY - rect.top) / rect.height;
+  r = Math.min(0.85, Math.max(0.15, r));
+  settings.split = r;
+  applySplit();
+});
+function endDrag() {
+  if (!dragging) return;
+  dragging = false;
+  splitDivider.classList.remove("dragging");
+  localStorage.setItem(LS.split, String(settings.split));
+}
+splitDivider.addEventListener("pointerup", endDrag);
+splitDivider.addEventListener("pointercancel", endDrag);
+
+/* =========================================================
    文字起こし表示
    ========================================================= */
 function appendTranscript(text) {
@@ -224,7 +282,7 @@ function appendTranscript(text) {
   const div = document.createElement("div");
   div.className = "ts-entry";
   const t = document.createElement("time");
-  t.textContent = nowHMS();
+  t.textContent = tsStamp();
   div.appendChild(t);
   div.appendChild(document.createTextNode(text));
   transcriptLog.appendChild(div);
@@ -260,10 +318,10 @@ function saveAsText() {
   const d = new Date();
   const stamp =
     d.getFullYear() +
-    String(d.getMonth() + 1).padStart(2, "0") +
-    String(d.getDate()).padStart(2, "0") + "_" +
-    String(d.getHours()).padStart(2, "0") +
-    String(d.getMinutes()).padStart(2, "0");
+    pad2(d.getMonth() + 1) +
+    pad2(d.getDate()) + "_" +
+    pad2(d.getHours()) +
+    pad2(d.getMinutes());
   const blob = new Blob([buildExportText()], { type: "text/plain;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -282,7 +340,8 @@ printBtn.addEventListener("click", () => window.print());
    送信トリガー管理(busy中・モード0では一切作動しない)
    ========================================================= */
 
-/* 環境A:2秒無音デバウンス。認識イベントが来るたびに張り直す */
+/* 環境A:1.5秒無音デバウンス。認識イベントが来るたびに張り直す。
+   busy中は新規タイマーを絶対に走らせない(応答完了時に張り直される) */
 function armSilenceTimer() {
   if (busy || currentMode === 0) return;
   clearTimeout(silenceTimer);
@@ -292,7 +351,8 @@ function armSilenceTimer() {
   }, SILENCE_FLUSH_MS);
 }
 
-/* 環境B:10秒強制送信。未送信テキスト発生時に1回だけ張る(延長しない) */
+/* 環境B:10秒強制送信。未送信テキスト発生時に1回だけ張る(延長しない)。
+   busy中・作動中は即リターン → 同時に存在できるforceTimerは常に最大1本 */
 function armForceTimer() {
   if (busy || currentMode === 0) return;
   if (forceTimer) return;
@@ -344,7 +404,7 @@ async function startVAD() {
       },
     });
   } catch (err) {
-    // VADが使えなくても2秒/10秒トリガーで送信されるため、警告のみで続行
+    // VADが使えなくても1.5秒/10秒トリガーで送信されるため、警告のみで続行
     showError("マイク解析不可(VAD無効): " + shortError(err));
     return;
   }
@@ -411,7 +471,7 @@ function vadTick() {
     // ===== 閾値割れ:猶予時間の計測 =====
     if (!belowSince) belowSince = now;
     if (now - belowSince >= settings.vadHang) {
-      // ===== 発話終了(補助トリガー):2秒を待たず送信を試みる =====
+      // ===== 発話終了(補助トリガー):デバウンスを待たず送信を試みる =====
       speaking = false;
       belowSince = 0;
       tryFlush(false); // busy中・モード0・条件未達なら内部で安全にスキップされる
@@ -482,12 +542,12 @@ function createRecognition() {
              (busy中は両関数とも内部で即リターン。
               応答完了時のfinallyで張り直されるため取りこぼしなし) */
           pendingBuffer += (pendingBuffer ? "\n" : "") + text;
-          armSilenceTimer();  // 【環境A】2秒無音デバウンス
+          armSilenceTimer();  // 【環境A】1.5秒無音デバウンス
           armForceTimer();    // 【環境B】10秒強制送信(作動中なら延長しない)
         }
         /* モード0:AI通信なし。バッファに積まない(トークン消費ゼロ) */
       } else {
-        /* ===== 認識途中:まだ話している → 2秒タイマーを延長 ===== */
+        /* ===== 認識途中:まだ話している → デバウンスを延長 ===== */
         interim += text;
         lastFinalAt = Date.now(); // interimが来ている間はエンジン生存とみなす
         if (silenceTimer) armSilenceTimer();
@@ -521,19 +581,33 @@ function createRecognition() {
   return rec;
 }
 
-/* ウォッチドッグ:VADは音声を検知しているのに認識テキストが長時間来ない
-   → 認識エンジンが黙り込んでいる(雑音環境で頻発)とみなし強制再起動 */
+/* ウォッチドッグ:
+   1) VADは音声を検知しているのに認識テキストが長時間来ない
+      → 認識エンジンの黙り込みとみなし強制再起動
+   2) 無音自動停止: 発話確定がautoStop分なければマイクOFF
+      (切り忘れによる意図しないAPI消費を防止) */
 function startWatchdog() {
   stopWatchdog();
   lastFinalAt = Date.now();
   watchdogTimer = setInterval(() => {
     if (!listening || !recognition) return;
     const now = Date.now();
+
+    // 1) エンジン黙り込み検出(VAD有効時のみ判定可能)
     const voiceRecently = now - lastVoiceAt < RESTART_IF_SILENT_MS;
     const noTextLong    = now - lastFinalAt > RESTART_IF_SILENT_MS;
     if (voiceRecently && noTextLong) {
       lastFinalAt = now; // 連続再起動防止
       try { recognition.stop(); } catch (_) {} // onendが再起動する
+      return;
+    }
+
+    // 2) 無音自動停止
+    if (settings.autoStop > 0 && now - lastFinalAt > settings.autoStop * 60000) {
+      stopListening();
+      appendAIEntry(currentMode,
+        `無音が${settings.autoStop}分続いたため、マイクを自動停止しました。`,
+        { done: true });
     }
   }, WATCHDOG_MS);
 }
@@ -584,14 +658,21 @@ function getModel() {
     return modelCache.model;
   }
   genAI = new GoogleGenerativeAI(settings.apiKey);
+
+  /* 思考設定はモデル世代で切替(両方同時指定は400エラー):
+     - Gemini 3系  : thinkingLevel "minimal"(最速)
+     - Gemini 2.5系: thinkingBudget 0(思考無効) */
+  const isGen3 = /gemini-3/.test(settings.model);
+  const generationConfig = {
+    maxOutputTokens: MAX_OUTPUT_TOKENS,
+    thinkingConfig: isGen3
+      ? { thinkingLevel: "minimal" }
+      : { thinkingBudget: 0 },
+  };
+
   const model = genAI.getGenerativeModel({
     model: settings.model,
-    generationConfig: {
-      maxOutputTokens: MAX_OUTPUT_TOKENS,
-      // gemini-2.5系は思考(thinking)トークンがmaxOutputTokensを消費し、
-      // 本文が数文字で切れたり空になるため、思考を無効化する(応答も速くなる)
-      thinkingConfig: { thinkingBudget: 0 },
-    },
+    generationConfig,
   });
   modelCache = { key: settings.apiKey, name: settings.model, model };
   return model;
@@ -604,7 +685,7 @@ function appendAIEntry(mode, text, opts = {}) {
   div.className = `ai-entry mode-${mode}` + (opts.error ? " error" : "") + (opts.done ? "" : " streaming");
   const head = document.createElement("span");
   head.className = "ai-head";
-  head.textContent = `${MODES[mode].head} · ${nowHMS()}`;
+  head.textContent = `${MODES[mode].head} · ${aiStamp()}`;
   div.appendChild(head);
   const body = document.createElement("span");
   body.className = "ai-body";
@@ -688,6 +769,7 @@ document.querySelectorAll(".mode-btn").forEach((btn) => {
     document.querySelectorAll(".mode-btn").forEach((b) =>
       b.classList.toggle("active", b === btn)
     );
+    applyModeLayout();
     if (currentMode === 0) {
       /* モード0:AI通信を完全停止。タイマー全消去+未送信分も破棄 */
       clearFlushTimers();
@@ -708,9 +790,11 @@ function openSettings() {
   apiKeyInput.value      = settings.apiKey;
   modelInput.value       = settings.model;
   vadRatioInput.value    = settings.vadRatio;
+  vadRatioVal.textContent = settings.vadRatio.toFixed(1);
   vadHangInput.value     = settings.vadHang;
   vadOnInput.checked     = settings.vadOn;
   minIntervalInput.value = settings.minInterval;
+  autoStopInput.value    = settings.autoStop;
   settingsModal.classList.remove("hidden");
 }
 function closeSettings() {
@@ -720,19 +804,26 @@ function closeSettings() {
 settingsBtn.addEventListener("click", openSettings);
 $("settingsCancelBtn").addEventListener("click", closeSettings);
 
+/* 感知比率スライダー:動かすと値を即表示 */
+vadRatioInput.addEventListener("input", () => {
+  vadRatioVal.textContent = parseFloat(vadRatioInput.value).toFixed(1);
+});
+
 $("settingsSaveBtn").addEventListener("click", () => {
   settings.apiKey      = apiKeyInput.value.trim();
   settings.model       = modelInput.value.trim() || DEFAULT_MODEL;
-  settings.vadRatio    = Math.min(10, Math.max(1.2, parseFloat(vadRatioInput.value) || 2.5));
+  settings.vadRatio    = Math.min(6, Math.max(1.2, parseFloat(vadRatioInput.value) || 2.5));
   settings.vadHang     = Math.min(5000, Math.max(300, parseInt(vadHangInput.value, 10) || 800));
+  settings.minInterval = Math.min(120, Math.max(0, parseInt(minIntervalInput.value, 10) || 8));
+  settings.autoStop    = Math.min(120, Math.max(0, parseInt(autoStopInput.value, 10) || 0));
   const prevVadOn = settings.vadOn;
   settings.vadOn       = vadOnInput.checked;
-  settings.minInterval = Math.min(120, Math.max(0, parseInt(minIntervalInput.value, 10) || 15));
   localStorage.setItem(LS.apiKey,      settings.apiKey);
   localStorage.setItem(LS.model,       settings.model);
   localStorage.setItem(LS.vadRatio,    String(settings.vadRatio));
   localStorage.setItem(LS.vadHang,     String(settings.vadHang));
   localStorage.setItem(LS.minInterval, String(settings.minInterval));
+  localStorage.setItem(LS.autoStop,    String(settings.autoStop));
   localStorage.setItem(LS.vadOn,       settings.vadOn ? "1" : "0");
   // VAD設定が変わった場合、傍聴中なら即反映
   if (prevVadOn !== settings.vadOn && listening) {
@@ -767,9 +858,10 @@ if ("serviceWorker" in navigator && location.protocol === "https:") {
 }
 
 /* =========================================================
-   起動時:バージョン表示+APIキー未設定なら設定を開く
+   起動時:バージョン表示・レイアウト適用・APIキー未設定なら設定を開く
    ========================================================= */
-const verLabel = document.getElementById("verLabel");
 if (verLabel) verLabel.textContent = APP_VERSION;
+applySplit();
+applyModeLayout();
 
 if (!settings.apiKey) openSettings();

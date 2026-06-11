@@ -3,7 +3,7 @@
    静的ファイルのみキャッシュ。API通信はキャッシュしない。
    ========================================================= */
 
-const CACHE = "ai-listener-v11";
+const CACHE = "ai-listener-v13";
 const ASSETS = [
   "./",
   "./index.html",
